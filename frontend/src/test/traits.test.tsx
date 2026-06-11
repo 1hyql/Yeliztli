@@ -7,6 +7,7 @@ import PathwayCard from "@/components/traits/PathwayCard"
 import TraitsPRSGaugeCard from "@/components/traits/TraitsPRSGaugeCard"
 import BigFiveRadarChart from "@/components/traits/BigFiveRadarChart"
 import type { PathwaySummary, TraitsPRS, SNPDetail } from "@/types/traits"
+import { PRS_PROV_DEFAULTS } from "./fixtures/prs"
 
 // ── Fixtures ──────────────────────────────────────────────────────────
 
@@ -64,6 +65,7 @@ const SUFFICIENT_PRS: TraitsPRS = {
   calibrated: true,
   research_use_only: true,
   evidence_level: 2,
+  ...PRS_PROV_DEFAULTS,
 }
 
 const INSUFFICIENT_PRS: TraitsPRS = {
@@ -84,6 +86,7 @@ const INSUFFICIENT_PRS: TraitsPRS = {
   calibrated: true,
   research_use_only: true,
   evidence_level: 2,
+  ...PRS_PROV_DEFAULTS,
 }
 
 const UNCALIBRATED_PRS: TraitsPRS = {
@@ -104,6 +107,7 @@ const UNCALIBRATED_PRS: TraitsPRS = {
   calibrated: false,
   research_use_only: true,
   evidence_level: 2,
+  ...PRS_PROV_DEFAULTS,
 }
 
 const MISMATCH_PRS: TraitsPRS = {
@@ -124,6 +128,7 @@ const MISMATCH_PRS: TraitsPRS = {
   calibrated: true,
   research_use_only: true,
   evidence_level: 2,
+  ...PRS_PROV_DEFAULTS,
 }
 
 const BIG_FIVE_SNPS: SNPDetail[] = [
