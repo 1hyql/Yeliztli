@@ -7,7 +7,7 @@ Covers:
   - COMT Val158Met catecholamine-only framing
   - Genotype normalization
   - SNP scoring with evidence-level gating
-  - Additive scoring model (≥3 Moderate → pathway Elevated)
+  - Multiple Moderate findings remain Moderate
   - Pathway level determination (highest category)
   - MTHFR migration from Nutrigenomics
   - Full scoring integration with sample DB
@@ -461,19 +461,19 @@ class TestPathwayLevel:
         assert level == STANDARD
         assert promoted is False
 
-    def test_additive_promotion_3_moderate_with_star2(self) -> None:
-        """≥3 Moderate SNPs + at least one ★★ → promoted to Elevated."""
+    def test_multiple_moderates_do_not_promote_to_elevated(self) -> None:
+        """Multiple Moderate SNPs do not create a generic Elevated pathway call."""
         results = [
             _make_snp_result(MODERATE, present=True, evidence=2),
             _make_snp_result(MODERATE, present=True, evidence=1),
             _make_snp_result(MODERATE, present=True, evidence=1),
         ]
         level, promoted = _determine_pathway_level(results)
-        assert level == ELEVATED
-        assert promoted is True
+        assert level == MODERATE
+        assert promoted is False
 
-    def test_additive_no_promotion_without_star2(self) -> None:
-        """3 Moderate SNPs but all ★☆ → NOT promoted (need ★★ for promotion)."""
+    def test_three_star1_moderates_stay_moderate(self) -> None:
+        """Three ★☆ Moderate SNPs stay Moderate."""
         results = [
             _make_snp_result(MODERATE, present=True, evidence=1),
             _make_snp_result(MODERATE, present=True, evidence=1),
@@ -483,8 +483,8 @@ class TestPathwayLevel:
         assert level == MODERATE
         assert promoted is False
 
-    def test_additive_no_promotion_only_2_moderate(self) -> None:
-        """Only 2 Moderate SNPs → no additive promotion."""
+    def test_two_moderates_stay_moderate(self) -> None:
+        """Only 2 Moderate SNPs stay Moderate."""
         results = [
             _make_snp_result(MODERATE, present=True, evidence=2),
             _make_snp_result(MODERATE, present=True, evidence=2),
@@ -494,8 +494,8 @@ class TestPathwayLevel:
         assert level == MODERATE
         assert promoted is False
 
-    def test_additive_no_promotion_when_already_elevated(self) -> None:
-        """Already Elevated → additive scoring doesn't apply."""
+    def test_actual_elevated_snp_still_drives_elevated_pathway(self) -> None:
+        """An actual Elevated SNP still drives an Elevated pathway."""
         results = [
             _make_snp_result(ELEVATED, present=True, evidence=2),
             _make_snp_result(MODERATE, present=True, evidence=2),
@@ -827,16 +827,14 @@ class TestStoreFindingsIntegration:
         pmids = json.loads(row.pmid_citations)
         assert "23824729" in pmids
 
-    def test_additive_promoted_pathway_stored(
+    def test_multiple_moderate_pathway_stored_without_additive_promotion(
         self,
         panel: MethylationPanel,
         sample_engine: sa.Engine,
         reference_engine: sa.Engine,
     ) -> None:
-        """Pathway promoted by additive scoring has '(additive)' in finding text."""
-        # Seed enough folate_mthfr variants to trigger additive promotion
-        # folate_mthfr has MTHFR (★★), and several ★☆ SNPs
-        # We need ≥3 Moderate + at least one ★★
+        """Multiple Moderate folate findings stay Moderate and are marked as context."""
+        # Seed the historical additive-promotion case: 4 Moderate SNPs including ★★.
         _seed_variants(
             sample_engine,
             [
@@ -850,11 +848,8 @@ class TestStoreFindingsIntegration:
         result = score_methylation_pathways(panel, sample_engine, reference_engine)
         folate = next(pr for pr in result.pathway_results if pr.pathway_id == "folate_mthfr")
 
-        # With 4 Moderate SNPs including ★★, additive must promote
-        assert folate.additive_promoted, (
-            "Expected additive promotion with 4 Moderate SNPs including ★★; "
-            "verify panel genotype_effects still classify these as Moderate"
-        )
+        assert folate.level == MODERATE
+        assert folate.additive_promoted is False
 
         store_methylation_findings(result, sample_engine)
         with sample_engine.connect() as conn:
@@ -868,9 +863,57 @@ class TestStoreFindingsIntegration:
                 )
             ).first()
         assert row is not None
-        assert "(additive)" in row.finding_text
+        assert row.pathway_level == MODERATE
+        assert (
+            row.finding_text
+            == "Folate & MTHFR — Moderate consideration (multiple moderate findings)"
+        )
         detail = json.loads(row.detail_json)
-        assert detail["additive_promoted"] is True
+        assert detail["additive_promoted"] is False
+        assert detail["moderate_snp_count"] == 4
+        assert detail["multiple_moderate_findings"] is True
+
+    def test_reference_folate_genotypes_do_not_store_multiple_moderate_marker(
+        self,
+        panel: MethylationPanel,
+        sample_engine: sa.Engine,
+        reference_engine: sa.Engine,
+    ) -> None:
+        """Reference folate genotypes stay Standard and do not get the context marker."""
+        _seed_variants(
+            sample_engine,
+            [
+                ("rs1801133", "1", 11856378, "GG"),  # C677T reference
+                ("rs1801131", "1", 11854476, "AA"),  # A1298C reference
+                ("rs1051266", "21", 46957794, "GG"),  # SLC19A1 reference
+                ("rs202676", "11", 49175363, "GG"),  # FOLH1 reference
+            ],
+        )
+
+        result = score_methylation_pathways(panel, sample_engine, reference_engine)
+        folate = next(pr for pr in result.pathway_results if pr.pathway_id == "folate_mthfr")
+
+        assert folate.level == STANDARD
+        assert folate.additive_promoted is False
+
+        store_methylation_findings(result, sample_engine)
+        with sample_engine.connect() as conn:
+            row = conn.execute(
+                sa.select(findings).where(
+                    sa.and_(
+                        findings.c.module == MODULE_NAME,
+                        findings.c.category == "pathway_summary",
+                        findings.c.pathway == "Folate & MTHFR",
+                    )
+                )
+            ).first()
+        assert row is not None
+        assert row.pathway_level == STANDARD
+        assert row.finding_text == "Folate & MTHFR — Standard (no variants of concern)"
+        detail = json.loads(row.detail_json)
+        assert detail["additive_promoted"] is False
+        assert detail["moderate_snp_count"] == 0
+        assert detail["multiple_moderate_findings"] is False
 
 
 # ── PathwayResult properties ────────────────────────────────────────────
