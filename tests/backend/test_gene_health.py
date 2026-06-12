@@ -345,6 +345,24 @@ class TestSNPScoring:
             result = _score_snp(snp, genotype)
             assert result.category == STANDARD, f"{genotype} should be Standard, not risk"
 
+    def test_hla_drb1_ra_proxy_uses_g_risk_allele(self, panel: GeneHealthPanel) -> None:
+        """RA shared-epitope proxy rs6910071 uses the catalogued G risk allele."""
+        snp = self._get_snp(panel, "rs6910071")
+        assert snp.risk_allele == "G"
+        assert snp.ref_allele == "A"
+
+        expected_categories = {
+            "GG": ELEVATED,
+            "GA": ELEVATED,
+            "AG": ELEVATED,
+            "AA": STANDARD,
+        }
+        for genotype, expected in expected_categories.items():
+            result = _score_snp(snp, genotype)
+            assert result.category == expected
+
+        assert "rs6910071-G" in _score_snp(snp, "GG").effect_summary
+
     def test_lrrk2_g2019s_uses_reduced_penetrance_parkinsons_framing(
         self,
         panel: GeneHealthPanel,
@@ -629,6 +647,42 @@ class TestFullScoring:
             ).scalar_one()
 
         assert il23r_findings == []
+        assert autoimmune_summary == STANDARD
+
+    def test_hla_drb1_ra_proxy_hom_ref_does_not_emit_snp_finding(
+        self,
+        panel: GeneHealthPanel,
+        sample_engine: sa.Engine,
+        reference_engine: sa.Engine,
+    ) -> None:
+        """All-reference rs6910071 AA must stay absent from stored SNP findings."""
+        _seed_variants(sample_engine, [("rs6910071", "6", 32574073, "AA")])
+
+        result = score_gene_health_pathways(panel, sample_engine, reference_engine)
+        autoimmune = next(pr for pr in result.pathway_results if pr.pathway_id == "autoimmune")
+        hla_drb1 = next(snp for snp in autoimmune.snp_results if snp.rsid == "rs6910071")
+
+        assert hla_drb1.category == STANDARD
+        assert autoimmune.level == STANDARD
+
+        store_gene_health_findings(result, sample_engine)
+        with sample_engine.connect() as conn:
+            hla_findings = conn.execute(
+                sa.select(findings).where(
+                    findings.c.module == MODULE_NAME,
+                    findings.c.rsid == "rs6910071",
+                    findings.c.category == "snp_finding",
+                )
+            ).fetchall()
+            autoimmune_summary = conn.execute(
+                sa.select(findings.c.pathway_level).where(
+                    findings.c.module == MODULE_NAME,
+                    findings.c.category == "pathway_summary",
+                    findings.c.pathway == autoimmune.pathway_name,
+                )
+            ).scalar_one()
+
+        assert hla_findings == []
         assert autoimmune_summary == STANDARD
 
     def test_lrrk2_g2019s_alone_is_moderate_not_high_confidence(
