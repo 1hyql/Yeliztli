@@ -342,6 +342,55 @@ class TestSNPScoring:
         assert "33331250" in cc.pmids
 
 
+class TestLactaseAncestryCaveat:
+    """#181 — the European LCT -13910 (rs4988235) non-persistence call must be
+    ancestry-caveated outside European/South-Asian ancestry, where other LCT
+    enhancer variants (not assayed) drive persistence."""
+
+    def _lct(self, panel: NutrigenomicsPanel) -> PanelSNP:
+        return next(snp for pw in panel.pathways for snp in pw.snps if snp.rsid == "rs4988235")
+
+    def test_panel_carries_ancestry_caveat(self, panel: NutrigenomicsPanel) -> None:
+        cfg = self._lct(panel).ancestry_caveat
+        assert cfg is not None
+        assert cfg["confident_ancestries"] == ["EUR", "SAS"]
+        assert cfg["applies_to_categories"] == ["Elevated"]
+        assert "does not assay" in cfg["caveat_text"]
+
+    def test_european_call_not_caveated(self, panel: NutrigenomicsPanel) -> None:
+        result = _score_snp(self._lct(panel), "GG", "EUR")
+        assert result.category == ELEVATED
+        assert result.ancestry_caveated is False
+        assert "Ancestry note" not in result.effect_summary
+
+    def test_south_asian_call_not_caveated(self, panel: NutrigenomicsPanel) -> None:
+        result = _score_snp(self._lct(panel), "GG", "SAS")
+        assert result.ancestry_caveated is False
+
+    def test_african_non_persistence_is_caveated(self, panel: NutrigenomicsPanel) -> None:
+        result = _score_snp(self._lct(panel), "GG", "AFR")
+        assert result.category == ELEVATED  # category unchanged; certainty caveated
+        assert result.ancestry_caveated is True
+        # Original call text preserved, with the ancestry/coverage caveat appended.
+        assert "lactase non-persistent" in result.effect_summary.lower()
+        assert "Ancestry note" in result.effect_summary
+        assert "does not assay" in result.effect_summary
+
+    def test_unknown_ancestry_is_caveated(self, panel: NutrigenomicsPanel) -> None:
+        # No inferred ancestry → can't confirm the European marker model → caveat.
+        result = _score_snp(self._lct(panel), "GG", None)
+        assert result.ancestry_caveated is True
+        assert "Ancestry note" in result.effect_summary
+
+    def test_persistent_call_never_caveated(self, panel: NutrigenomicsPanel) -> None:
+        # A persistent (AA) call is a positive *T-allele present result, valid
+        # across ancestries — only the absence-of-*T non-persistence call is gated.
+        result = _score_snp(self._lct(panel), "AA", "AFR")
+        assert result.category == STANDARD
+        assert result.ancestry_caveated is False
+        assert "Ancestry note" not in result.effect_summary
+
+
 # ── Pathway level determination tests ────────────────────────────────────
 
 
@@ -685,6 +734,94 @@ class TestStoreFindingsIntegration:
         assert len(snp_findings) == 0
         # But pathway summaries should exist
         assert count == 6  # 6 pathway summaries, all Standard
+
+    @staticmethod
+    def _seed_ancestry(engine: sa.Engine, top_population: str) -> None:
+        """Seed an ancestry finding so get_inferred_ancestry resolves it."""
+        with engine.begin() as conn:
+            conn.execute(
+                sa.insert(findings),
+                {
+                    "module": "ancestry",
+                    "category": "pca_projection",
+                    "finding_text": f"Inferred ancestry: {top_population}",
+                    "detail_json": json.dumps({"top_population": top_population}),
+                },
+            )
+
+    def test_ancestry_caveat_persists_for_non_european(
+        self,
+        panel: NutrigenomicsPanel,
+        sample_engine: sa.Engine,
+        reference_engine: sa.Engine,
+    ) -> None:
+        """#181 end-to-end: AFR ancestry + LCT GG → ancestry_caveated persists to
+        both the snp_finding detail and the pathway-summary snp_details."""
+        self._seed_ancestry(sample_engine, "AFR")
+        _seed_variants(sample_engine, [("rs4988235", "2", 135851076, "GG")])
+
+        result = score_nutrigenomics_pathways(panel, sample_engine, reference_engine)
+        store_nutrigenomics_findings(result, sample_engine)
+
+        with sample_engine.connect() as conn:
+            snp_row = conn.execute(
+                sa.select(findings).where(
+                    sa.and_(
+                        findings.c.module == "nutrigenomics",
+                        findings.c.category == "snp_finding",
+                        findings.c.rsid == "rs4988235",
+                    )
+                )
+            ).first()
+            pathway_row = conn.execute(
+                sa.select(findings).where(
+                    sa.and_(
+                        findings.c.module == "nutrigenomics",
+                        findings.c.category == "pathway_summary",
+                    )
+                )
+            ).fetchall()
+
+        assert snp_row is not None
+        assert "Ancestry note" in snp_row.finding_text
+        assert json.loads(snp_row.detail_json)["ancestry_caveated"] is True
+
+        # The flag also rides on the pathway summary's per-SNP details.
+        lct_detail = next(
+            s
+            for r in pathway_row
+            for s in json.loads(r.detail_json)["snp_details"]
+            if s["rsid"] == "rs4988235"
+        )
+        assert lct_detail["ancestry_caveated"] is True
+
+    def test_no_ancestry_caveat_for_european(
+        self,
+        panel: NutrigenomicsPanel,
+        sample_engine: sa.Engine,
+        reference_engine: sa.Engine,
+    ) -> None:
+        """EUR ancestry + LCT GG → the call stands without an ancestry caveat."""
+        self._seed_ancestry(sample_engine, "EUR")
+        _seed_variants(sample_engine, [("rs4988235", "2", 135851076, "GG")])
+
+        result = score_nutrigenomics_pathways(panel, sample_engine, reference_engine)
+        store_nutrigenomics_findings(result, sample_engine)
+
+        with sample_engine.connect() as conn:
+            snp_row = conn.execute(
+                sa.select(findings).where(
+                    sa.and_(
+                        findings.c.module == "nutrigenomics",
+                        findings.c.category == "snp_finding",
+                        findings.c.rsid == "rs4988235",
+                    )
+                )
+            ).first()
+
+        assert snp_row is not None
+        assert "Ancestry note" not in snp_row.finding_text
+        assert json.loads(snp_row.detail_json)["ancestry_caveated"] is False
 
 
 class TestPathwayResultProperties:
