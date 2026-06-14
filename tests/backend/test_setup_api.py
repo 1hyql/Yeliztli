@@ -1119,6 +1119,42 @@ class TestIsVolatilePath:
         assert setup_module._is_volatile_path(Path("/mnt/ram/yeliztli")) is True
         assert setup_module._is_volatile_path(Path("/mnt/other/yeliztli")) is False
 
+    def test_macos_tmp_symlink_still_volatile(self, monkeypatch) -> None:
+        """Regression: on macOS /tmp (and /var/tmp) are symlinks into /private, so
+        Path.resolve() rewrites them — the detector must still flag them. It checks
+        the symlink-intact absolute form AND includes the /private/* roots."""
+        from backend.api.routes import setup as setup_module
+
+        real_resolve = Path.resolve
+        mapped = {
+            "/tmp": "/private/tmp",
+            "/var/tmp": "/private/var/tmp",
+            # A user symlink whose absolute() name is NOT under any root but which
+            # RESOLVES into macOS temp — exercises the resolved-form check + the
+            # /private/* roots (which the /tmp/var-tmp cases alone never reach,
+            # since their absolute() form already matches the original roots).
+            "/data/scratch": "/private/tmp/scratch",
+        }
+
+        def fake_resolve(self, *args, **kwargs):
+            s = str(self)
+            for src, dst in mapped.items():
+                if s == src:
+                    return Path(dst)
+                if s.startswith(src + "/"):
+                    return Path(dst + s[len(src) :])
+            return real_resolve(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "resolve", fake_resolve)
+        # Symlink-intact absolute() form keeps the volatile root match:
+        assert setup_module._is_volatile_path(Path("/tmp")) is True
+        assert setup_module._is_volatile_path(Path("/tmp/yeliztli")) is True
+        assert setup_module._is_volatile_path(Path("/var/tmp/foo")) is True
+        # Resolved-form match via the /private/* roots (absolute() doesn't match):
+        assert setup_module._is_volatile_path(Path("/data/scratch")) is True
+        # A persistent path is unaffected by the symlink mapping.
+        assert setup_module._is_volatile_path(Path("/opt/yeliztli/data")) is False
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # P1-19c: POST /api/setup/set-storage-path
