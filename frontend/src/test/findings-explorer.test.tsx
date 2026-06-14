@@ -271,4 +271,121 @@ describe("FindingsExplorer", () => {
 
     expect(await screen.findByText("Poor Metabolizer")).toBeInTheDocument()
   })
+
+  // ── Module links / labels (issue #544) ──────────────────────────────
+
+  function makeFinding(id: number, module: string, finding_text: string): Finding {
+    return {
+      id,
+      module,
+      category: "test",
+      evidence_level: 3,
+      gene_symbol: null,
+      rsid: null,
+      finding_text,
+      phenotype: null,
+      conditions: null,
+      zygosity: null,
+      clinvar_significance: null,
+      diplotype: null,
+      metabolizer_status: null,
+      drug: null,
+      haplogroup: null,
+      prs_score: null,
+      prs_percentile: null,
+      pathway: null,
+      pathway_level: null,
+      svg_path: null,
+      pmid_citations: [],
+      detail: null,
+      created_at: "2026-03-17T12:00:00",
+    }
+  }
+
+  it("links page-backed module findings to their real page, not the Dashboard", async () => {
+    // Previously every module missing from MODULE_META fell back to route "/",
+    // dumping the user on the Dashboard. Each of these has a dedicated page.
+    const findings: Finding[] = [
+      makeFinding(1, "cancer", "Cancer finding"), // control — already mapped
+      makeFinding(2, "fh", "FH finding"),
+      makeFinding(3, "gene_health", "Gene health finding"),
+      makeFinding(4, "methylation", "Methylation finding"),
+      makeFinding(5, "ebmd", "eBMD finding"),
+      makeFinding(6, "fitness", "Fitness finding"),
+    ]
+    setupFetchMock(findings, { total_findings: 6, modules: [], high_confidence_findings: [] })
+    renderWithRoute(<FindingsExplorer />, ["/?sample_id=1"])
+    await screen.findByText("FH finding")
+
+    const expected: Record<string, string> = {
+      Cancer: "/cancer?sample_id=1",
+      FH: "/fh?sample_id=1",
+      "Gene Health": "/gene-health?sample_id=1",
+      Methylation: "/methylation?sample_id=1",
+      eBMD: "/ebmd?sample_id=1",
+      Fitness: "/fitness?sample_id=1",
+    }
+    for (const [label, href] of Object.entries(expected)) {
+      const link = screen.getByRole("link", { name: `View ${label} module` })
+      expect(link).toHaveAttribute("href", href)
+    }
+  })
+
+  it("renders acronym module labels with correct casing (FH, eBMD), not Fh/Ebmd", async () => {
+    const findings: Finding[] = [
+      makeFinding(1, "fh", "FH finding"),
+      makeFinding(2, "ebmd", "eBMD finding"),
+    ]
+    setupFetchMock(findings, { total_findings: 2, modules: [], high_confidence_findings: [] })
+    renderWithRoute(<FindingsExplorer />, ["/?sample_id=1"])
+    await screen.findByText("FH finding")
+
+    expect(screen.getByRole("link", { name: "View FH module" })).toBeInTheDocument()
+    expect(screen.getByRole("link", { name: "View eBMD module" })).toBeInTheDocument()
+    // The old auto-title-case bug would have produced "Fh"/"Ebmd".
+    expect(screen.queryByText("Fh")).not.toBeInTheDocument()
+    expect(screen.queryByText("Ebmd")).not.toBeInTheDocument()
+  })
+
+  it("renders panel-only modules (no dedicated page) as a non-navigable label", async () => {
+    // A risk panel with no page must NOT render a link that lands on "/".
+    const findings: Finding[] = [makeFinding(1, "amd", "AMD risk finding")]
+    setupFetchMock(findings, { total_findings: 1, modules: [], high_confidence_findings: [] })
+    renderWithRoute(<FindingsExplorer />, ["/?sample_id=1"])
+    await screen.findByText("AMD risk finding")
+
+    // Label is present and correctly cased…
+    expect(screen.getByText("AMD")).toBeInTheDocument()
+    // …but it is not a link (no navigation, so it can never reach the Dashboard).
+    expect(screen.queryByRole("link", { name: /AMD module/ })).not.toBeInTheDocument()
+    // Defensive: no finding-row link points at the Dashboard root.
+    for (const link of screen.queryAllByRole("link")) {
+      expect(link.getAttribute("href")).not.toBe("/?sample_id=1")
+      expect(link.getAttribute("href")).not.toBe("/")
+    }
+  })
+
+  it("correctly cases the remaining page-less risk modules (MT-RNR1, Alpha-1, APOL1)", async () => {
+    // These persist findings too (store_risk_findings) but have no page — they
+    // must render correctly-cased, non-navigable labels, not "Mt Rnr1"/"Alpha1"/
+    // "Apol1" from the title-case fallback.
+    const findings: Finding[] = [
+      makeFinding(1, "mt_rnr1", "MT-RNR1 finding"),
+      makeFinding(2, "alpha1", "Alpha-1 finding"),
+      makeFinding(3, "apol1", "APOL1 finding"),
+    ]
+    setupFetchMock(findings, { total_findings: 3, modules: [], high_confidence_findings: [] })
+    renderWithRoute(<FindingsExplorer />, ["/?sample_id=1"])
+    await screen.findByText("MT-RNR1 finding")
+
+    expect(screen.getByText("MT-RNR1")).toBeInTheDocument()
+    expect(screen.getByText("Alpha-1")).toBeInTheDocument()
+    expect(screen.getByText("APOL1")).toBeInTheDocument()
+    // The old title-case fallback would have produced these:
+    expect(screen.queryByText("Mt Rnr1")).not.toBeInTheDocument()
+    expect(screen.queryByText("Alpha1")).not.toBeInTheDocument()
+    expect(screen.queryByText("Apol1")).not.toBeInTheDocument()
+    // None render a navigable link (no dedicated page).
+    expect(screen.queryAllByRole("link")).toHaveLength(0)
+  })
 })
