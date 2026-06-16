@@ -8,8 +8,9 @@ shipped bundle classified every European as CSA. This runs REAL held-out
 that each sample's top global-ancestry equals its true superpopulation.
 
 Usage:
-  YELIZTLI_DATA_DIR=<dir with lai_bundle/ extracted>  # or default ~/.yeliztli
-  python validate_heldout_superpop.py <fixtures_dir> <held_out_validation.tsv> [out.json]
+  YELIZTLI_LAI_BUNDLE_PATH=<assembled bundle dir>
+  YELIZTLI_DATA_DIR=<scratch data dir>
+  python 06f_heldout_superpop_accuracy.py <fixtures_dir> <held_out_validation.tsv> [out.json]
 
 Each fixture: <IID>_<REGION>.adna.txt.gz, 5-col (rsid, chrom, pos, a1, a2).
 Mirrors TestRealBundleLAIAccuracy / calibrate_lai.py exactly.
@@ -29,6 +30,17 @@ import sqlalchemy as sa
 from backend.analysis.lai import run_lai_analysis
 from backend.db.sample_schema import create_sample_tables
 from backend.db.tables import raw_variants, sample_metadata_table
+
+
+def read_accuracy_threshold(name: str, default: str = "1.0") -> float:
+    raw = os.environ.get(name, default)
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise SystemExit(f"{name} must be a number between 0.0 and 1.0; got {raw!r}") from exc
+    if not 0.0 <= value <= 1.0:
+        raise SystemExit(f"{name} must be between 0.0 and 1.0; got {value!r}")
+    return value
 
 
 def parse_fixture(path: Path) -> list[dict]:
@@ -166,14 +178,24 @@ def main() -> None:
     }
     overall = sum(per_region_correct.values()) / max(1, sum(per_region_total.values()))
     eur_acc = per_region_acc.get("EUR", 0.0)
+    min_region_accuracy = read_accuracy_threshold("HELDOUT_MIN_REGION_ACCURACY")
+    min_eur_accuracy = read_accuracy_threshold("HELDOUT_MIN_EUR_ACCURACY")
+    regions_below_threshold = {
+        reg: round(acc, 4) for reg, acc in per_region_acc.items() if acc < min_region_accuracy
+    }
+    eur_passes = eur_acc >= min_eur_accuracy
+    all_regions_pass = not regions_below_threshold
 
     report = {
         "overall_accuracy": round(overall, 4),
         "per_region_accuracy": {k: round(v, 4) for k, v in per_region_acc.items()},
         "per_region_n": dict(per_region_total),
+        "min_region_accuracy": min_region_accuracy,
+        "min_eur_accuracy": min_eur_accuracy,
         "eur_accuracy": round(eur_acc, 4),
-        "eur_passes": eur_acc == 1.0,
-        "all_regions_pass": all(v == 1.0 for v in per_region_acc.values()),
+        "eur_passes": eur_passes,
+        "regions_below_threshold": regions_below_threshold,
+        "all_regions_pass": all_regions_pass,
         "samples": results,
     }
     out_path.write_text(json.dumps(report, indent=2))
@@ -186,6 +208,13 @@ def main() -> None:
         flush=True,
     )
     print(f"report -> {out_path}", flush=True)
+    if not eur_passes or not all_regions_pass:
+        print(
+            "HELD-OUT SUPERPOPULATION GATE FAILED: "
+            f"eur_passes={eur_passes} regions_below_threshold={regions_below_threshold}",
+            flush=True,
+        )
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
