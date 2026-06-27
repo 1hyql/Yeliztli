@@ -16,12 +16,14 @@ from __future__ import annotations
 
 import json
 import logging
+from functools import lru_cache
 from typing import Any
 
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from backend.analysis.cancer import load_cancer_panel
 from backend.analysis.clinvar_significance import LOWER_PENETRANCE_RISK_ALLELE_CATEGORY
 from backend.api.dependencies import require_fresh_sample
 from backend.db.connection import get_registry
@@ -54,6 +56,7 @@ class CancerVariantResponse(BaseModel):
     cross_links: list[str] = []
     pmids: list[str] = []
     clinvar_low_penetrance_or_risk_allele: bool = False
+    clinical_caveat: str | None = None
 
 
 class CancerVariantsListResponse(BaseModel):
@@ -146,6 +149,16 @@ def _get_sample_engine(sample_id: int) -> sa.Engine:
     return registry.get_sample_engine(sample_db_path)
 
 
+@lru_cache(maxsize=1)
+def _cancer_panel_metadata_by_gene() -> dict[str, tuple[str, tuple[str, ...]]]:
+    """Return current panel caveats and PMIDs keyed by gene symbol."""
+    return {
+        gene.gene_symbol.upper(): (gene.clinical_caveat, tuple(gene.pmids))
+        for gene in load_cancer_panel().genes
+        if gene.clinical_caveat or gene.pmids
+    }
+
+
 def _fetch_cancer_findings(
     sample_engine: sa.Engine,
     gene_filter: str | None = None,
@@ -190,6 +203,14 @@ def _fetch_cancer_findings(
             except (json.JSONDecodeError, TypeError):
                 logger.warning("Failed to parse pmid_citations for finding id=%s", row.id)
 
+        current_panel_caveat, current_panel_pmids = _cancer_panel_metadata_by_gene().get(
+            (row.gene_symbol or "").upper(),
+            ("", ()),
+        )
+        clinical_caveat = detail.get("clinical_caveat") or current_panel_caveat or None
+        if clinical_caveat:
+            pmids = [*pmids, *(pmid for pmid in current_panel_pmids if pmid not in pmids)]
+
         result.append(
             {
                 "rsid": row.rsid or "",
@@ -209,6 +230,7 @@ def _fetch_cancer_findings(
                 "clinvar_low_penetrance_or_risk_allele": detail.get(
                     "clinvar_low_penetrance_or_risk_allele", False
                 ),
+                "clinical_caveat": clinical_caveat,
             }
         )
 

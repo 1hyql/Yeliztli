@@ -33,6 +33,9 @@ export default function VariantCard({ variant, onClick, selected, sampleId }: Va
   const config = getClinvarSignificanceCardConfig(variant.clinvar_significance)
   const conditions = formatClinvarConditionsText(variant.clinvar_conditions)
   const hasCrossLink = variant.cross_links.includes("carrier")
+  const caveatId = variant.clinical_caveat
+    ? `cancer-clinical-caveat-${variant.gene_symbol}-${variant.rsid}`
+    : undefined
 
   return (
     <div
@@ -51,6 +54,7 @@ export default function VariantCard({ variant, onClick, selected, sampleId }: Va
       )}
       onClick={onClick}
       aria-label={`${variant.gene_symbol} ${variant.rsid} — ${variant.clinvar_significance}`}
+      aria-describedby={caveatId}
       data-testid="cancer-variant-card"
     >
       {/* Header: gene + significance badge */}
@@ -113,6 +117,17 @@ export default function VariantCard({ variant, onClick, selected, sampleId }: Va
         <p className="text-xs text-muted-foreground mb-2 line-clamp-2">
           {conditions}
         </p>
+      )}
+
+      {variant.clinical_caveat && (
+        <div
+          id={caveatId}
+          className="mb-2 flex items-start gap-2 border-l-2 border-amber-500 bg-amber-50 px-2.5 py-2 text-xs text-amber-950 dark:bg-amber-950/30 dark:text-amber-100"
+          data-testid="cancer-clinical-caveat"
+        >
+          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-700 dark:text-amber-300" aria-hidden="true" />
+          <p>{variant.clinical_caveat}</p>
+        </div>
       )}
 
       {/* Footer: evidence stars + inheritance */}
