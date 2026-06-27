@@ -700,6 +700,157 @@ class TestTreeWalkSharedAncestralMarkers:
         assert terminal.haplogroup == "CT"
         assert [s.haplogroup for s in path] == ["CT"]
 
+    def test_real_bundle_single_de_marker_is_not_terminal(self, bundle: HaplogroupBundle) -> None:
+        """#1079: one DE-specific SNP on sparse Y-array data is not enough to make
+        DE the terminal call. It can only support descent if a deeper child also has
+        independent support."""
+        genotypes = {
+            "rs2032652": "TT",  # one of CT's two defining markers
+            "rs2032602": "TT",  # DE-specific marker
+        }
+
+        terminal, path = _tree_walk(
+            bundle.y_tree,
+            genotypes,
+            [],
+            min_internal_terminal_specific_snps=2,
+        )
+
+        assert terminal.haplogroup == "CT"
+        assert [(s.haplogroup, s.snps_present, s.snps_total) for s in path] == [("CT", 1, 2)]
+
+    def test_one_marker_leaf_can_still_be_terminal_with_internal_floor(self) -> None:
+        """The #1079 guard is for under-supported internal nodes. A one-SNP leaf has
+        no deeper branch to over-resolve into, so the existing conflict/fraction
+        rules still allow it as terminal."""
+        root = HaplogroupNode(
+            haplogroup="root",
+            defining_snps=[],
+            children=[
+                HaplogroupNode(
+                    haplogroup="A",
+                    defining_snps=[HaplogroupSNP("a1", 1, "G"), HaplogroupSNP("a2", 2, "T")],
+                    children=[
+                        HaplogroupNode(
+                            haplogroup="A1",
+                            defining_snps=[HaplogroupSNP("leaf", 3, "C")],
+                            children=[],
+                        ),
+                    ],
+                ),
+            ],
+        )
+        genotypes = {"a1": "GG", "a2": "TT", "leaf": "CC"}
+
+        terminal, path = _tree_walk(
+            root,
+            genotypes,
+            [],
+            min_internal_terminal_specific_snps=2,
+        )
+
+        assert terminal.haplogroup == "A1"
+        assert [s.haplogroup for s in path] == ["A", "A1"]
+
+    def test_sparse_internal_passthrough_competes_with_direct_sibling(self) -> None:
+        """A sparse internal branch that reaches deeper support should not be skipped
+        just because a direct sibling also clears the minimum fraction."""
+        root = HaplogroupNode(
+            haplogroup="root",
+            defining_snps=[],
+            children=[
+                HaplogroupNode(
+                    haplogroup="SPARSE",
+                    defining_snps=[HaplogroupSNP("s", 1, "G")],
+                    children=[
+                        HaplogroupNode(
+                            haplogroup="DEEP",
+                            defining_snps=[
+                                HaplogroupSNP("d1", 2, "T"),
+                                HaplogroupSNP("d2", 3, "C"),
+                            ],
+                            children=[],
+                        ),
+                    ],
+                ),
+                HaplogroupNode(
+                    haplogroup="SIBLING",
+                    defining_snps=[
+                        HaplogroupSNP("sib1", 4, "A"),
+                        HaplogroupSNP("sib2", 5, "G"),
+                    ],
+                    children=[],
+                ),
+            ],
+        )
+        genotypes = {
+            "s": "GG",
+            "d1": "TT",
+            "d2": "CC",
+            "sib1": "AA",
+        }
+
+        terminal, path = _tree_walk(
+            root,
+            genotypes,
+            [],
+            min_internal_terminal_specific_snps=2,
+        )
+
+        assert terminal.haplogroup == "DEEP"
+        assert [s.haplogroup for s in path] == ["SPARSE", "DEEP"]
+
+    def test_passthrough_ranking_ignores_inherited_marker_counts(self) -> None:
+        """Candidate ranking must use clade-specific support, not the full display
+        counts that include parent markers re-listed on structural pass-throughs."""
+        root = HaplogroupNode(
+            haplogroup="root",
+            defining_snps=[],
+            children=[
+                HaplogroupNode(
+                    haplogroup="PARENT",
+                    defining_snps=[HaplogroupSNP("p", 1, "G")],
+                    children=[
+                        HaplogroupNode(
+                            haplogroup="PT",
+                            defining_snps=[HaplogroupSNP("p", 1, "G")],
+                            children=[
+                                HaplogroupNode(
+                                    haplogroup="DEEP",
+                                    defining_snps=[HaplogroupSNP("d", 2, "T")],
+                                    children=[],
+                                ),
+                            ],
+                        ),
+                        HaplogroupNode(
+                            haplogroup="SIBLING",
+                            defining_snps=[
+                                HaplogroupSNP("sib1", 3, "A"),
+                                HaplogroupSNP("sib2", 4, "C"),
+                            ],
+                            children=[],
+                        ),
+                    ],
+                ),
+            ],
+        )
+        genotypes = {
+            "p": "GG",
+            "d": "TT",
+            "sib1": "AA",
+            "sib2": "CC",
+        }
+
+        terminal, path = _tree_walk(
+            root,
+            genotypes,
+            [],
+            min_internal_terminal_specific_snps=2,
+        )
+
+        assert terminal.haplogroup == "SIBLING"
+        assert [s.haplogroup for s in path] == ["PARENT", "SIBLING"]
+
     def test_synthetic_shared_marker_children_do_not_over_resolve(self) -> None:
         """Two children that each re-list one of the parent's markers (the CT/DE,
         CT/F shape) are both refused when their own markers are untyped."""
@@ -858,6 +1009,31 @@ class TestAssignHaplogroups:
         assert mt.haplogroup == "H1a"
         # Tree may walk deeper than R1b1a if child nodes also match
         assert y.haplogroup.startswith("R1b1a")
+
+    def test_y_single_de_marker_stops_at_ct(
+        self, bundle: HaplogroupBundle, sample_engine: sa.Engine
+    ) -> None:
+        """#1079: production Y assignment applies the terminal-support guard, so a
+        sparse XY sample with one CT marker plus one DE marker reports CT, not DE."""
+        rows = (
+            [
+                {"rsid": "rs2032652", "chrom": "Y", "pos": 21869271, "genotype": "TT"},
+                {"rsid": "rs2032602", "chrom": "Y", "pos": 14895148, "genotype": "TT"},
+            ]
+            + _Y_TYPED_PADDING
+            + _NONPAR_X_HOM_GENOTYPES
+        )
+        with sample_engine.begin() as conn:
+            conn.execute(sa.insert(raw_variants), rows)
+
+        results = assign_haplogroups(bundle, sample_engine)
+
+        assert len(results) == 2
+        y = next(r for r in results if r.tree_type == "Y")
+        assert y.haplogroup == "CT"
+        assert [(s.haplogroup, s.snps_present, s.snps_total) for s in y.traversal_path] == [
+            ("CT", 1, 2)
+        ]
 
     def test_confidence_calculation(
         self, bundle: HaplogroupBundle, sample_engine: sa.Engine
