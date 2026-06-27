@@ -45,46 +45,48 @@ PATHWAY_SUMMARY_FINDINGS = [
         "finding_text": "Personality Big Five — Moderate consideration",
         "pathway": "Personality Big Five",
         "pathway_level": "Moderate",
-        "pmid_citations": json.dumps(["29942085"]),
+        "pmid_citations": json.dumps(["29942085", "21173776"]),
         "detail_json": json.dumps(
             {
                 "pathway_id": "personality_big_five",
                 "prs_primary": False,
                 "called_snps": 3,
-                "total_snps": 5,
-                "missing_snps": ["rs747302", "rs6265"],
+                "total_snps": 3,
+                "missing_snps": [],
                 "snp_details": [
                     {
-                        "rsid": "rs2164273",
-                        "gene": "CTNNA2",
-                        "variant_name": "CTNNA2 intergenic",
-                        "genotype": "AG",
+                        "rsid": "rs1477268",
+                        "gene": "RASA1",
+                        "variant_name": "5q14.3 RASA1-region",
+                        "genotype": "CC",
                         "category": "Moderate",
-                        "effect_summary": "Associated with increased extraversion.",
-                        "evidence_level": 2,
-                        "trait_domain": "extraversion",
+                        "effect_summary": "Associated with higher openness in discovery samples.",
+                        "evidence_level": 1,
+                        "trait_domain": "openness",
                         "coverage_note": None,
                     },
                     {
-                        "rsid": "rs4680",
-                        "gene": "COMT",
-                        "variant_name": "Val158Met",
-                        "genotype": "AG",
+                        "rsid": "rs242949",
+                        "gene": "CRHR1",
+                        "variant_name": "CRHR1 intronic",
+                        "genotype": "GT",
                         "category": "Moderate",
-                        "effect_summary": "Heterozygous — intermediate catecholamine clearance.",
+                        "effect_summary": "Associated with neuroticism measurement in GWAS.",
                         "evidence_level": 2,
                         "trait_domain": "neuroticism",
                         "coverage_note": None,
                     },
                     {
-                        "rsid": "rs1800955",
-                        "gene": "DRD4",
-                        "variant_name": "DRD4 -521C/T",
+                        "rsid": "rs2576037",
+                        "gene": "KATNAL2",
+                        "variant_name": "KATNAL2 intronic",
                         "genotype": "CT",
-                        "category": "Standard",
-                        "effect_summary": "One copy; associated with novelty seeking.",
+                        "category": "Moderate",
+                        "effect_summary": (
+                            "Associated with lower conscientiousness in discovery samples."
+                        ),
                         "evidence_level": 1,
-                        "trait_domain": "openness",
+                        "trait_domain": "conscientiousness",
                         "coverage_note": None,
                     },
                 ],
@@ -204,18 +206,20 @@ PRS_FINDINGS = [
 SNP_FINDING = {
     "module": "traits",
     "category": "snp_finding",
-    "evidence_level": 2,
-    "gene_symbol": "CTNNA2",
-    "rsid": "rs2164273",
-    "finding_text": "CTNNA2 (rs2164273, AG) — Associated with increased extraversion.",
+    "evidence_level": 1,
+    "gene_symbol": "RASA1",
+    "rsid": "rs1477268",
+    "finding_text": (
+        "RASA1 (rs1477268, CC) — Associated with higher openness in discovery samples."
+    ),
     "pathway": "Personality Big Five",
     "pathway_level": "Moderate",
-    "pmid_citations": json.dumps(["29942085"]),
+    "pmid_citations": json.dumps(["21173776"]),
     "detail_json": json.dumps(
         {
-            "variant_name": "CTNNA2 intergenic",
-            "genotype": "AG",
-            "trait_domain": "extraversion",
+            "variant_name": "5q14.3 RASA1-region",
+            "genotype": "CC",
+            "trait_domain": "openness",
             "recommendation": None,
             "cross_module": None,
         }
@@ -350,7 +354,7 @@ class TestListPathways:
         assert item["level"] == "Moderate"
         assert item["evidence_level"] == 2
         assert item["called_snps"] == 3
-        assert item["total_snps"] == 5
+        assert item["total_snps"] == 3
         assert item["prs_primary"] is False
 
     def test_prs_primary_flag(self, seeded_client: TestClient) -> None:
@@ -396,10 +400,14 @@ class TestPathwayDetail:
         resp = seeded_client.get("/api/analysis/traits/pathway/personality_big_five?sample_id=1")
         data = resp.json()
         snps = data["snp_details"]
-        extra = next(s for s in snps if s["rsid"] == "rs2164273")
-        assert extra["gene"] == "CTNNA2"
-        assert extra["trait_domain"] == "extraversion"
-        assert extra["category"] == "Moderate"
+        openness = next(s for s in snps if s["rsid"] == "rs1477268")
+        assert openness["gene"] == "RASA1"
+        assert openness["trait_domain"] == "openness"
+        assert openness["category"] == "Moderate"
+        conscientiousness = next(s for s in snps if s["rsid"] == "rs2576037")
+        assert conscientiousness["gene"] == "KATNAL2"
+        assert conscientiousness["trait_domain"] == "conscientiousness"
+        assert conscientiousness["category"] == "Moderate"
 
     def test_missing_pathway_404(self, seeded_client: TestClient) -> None:
         resp = seeded_client.get("/api/analysis/traits/pathway/nonexistent?sample_id=1")
