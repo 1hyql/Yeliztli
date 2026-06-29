@@ -9,7 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 try:
@@ -211,6 +211,38 @@ class Settings(BaseSettings):
             "Env: YELIZTLI_IMPUTE5_BIN_DIR."
         ),
     )
+
+    # --- HLA / HIBAG (Wave D, opt-in / operator-installed R runtime) ---
+    hibag_rscript: Path | None = Field(
+        default=None,
+        description=(
+            "Path to the Rscript executable (or its directory) for the HIBAG HLA "
+            "imputation engine. When unset, Rscript is resolved from PATH; when "
+            "absent the engine is unavailable and the single-tag HLA proxy remains "
+            "the fallback (never fatal). Env: YELIZTLI_HIBAG_RSCRIPT."
+        ),
+    )
+    hibag_model_dir: Path | None = Field(
+        default=None,
+        description=(
+            "Directory holding the BYO, user-fetched, ancestry-specific HIBAG "
+            "pre-fit model files ({ancestry}-HLA4.RData) — never bundled. When "
+            "unset or empty the engine is unavailable. Env: YELIZTLI_HIBAG_MODEL_DIR."
+        ),
+    )
+
+    @field_validator("hibag_rscript", "hibag_model_dir", mode="before")
+    @classmethod
+    def _blank_to_none(cls, value: object) -> object:
+        """Treat a blank env/config value as unset (fail closed for the HLA engine).
+
+        Without this an empty ``YELIZTLI_HIBAG_*`` would coerce to ``Path('.')``
+        (the CWD) rather than ``None``, so the engine could look for Rscript/models
+        in the working directory instead of reporting itself unavailable.
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     # --- UI preferences ---
     theme: Literal["light", "dark", "system"] = "system"
