@@ -474,12 +474,12 @@ describe('SetupWizard', () => {
 function mockStorageInfo(overrides: Record<string, unknown> = {}) {
   return {
     data_dir: '/home/test/.yeliztli',
-    free_space_bytes: 50 * 1024 * 1024 * 1024,
-    free_space_gb: 50,
-    total_space_bytes: 100 * 1024 * 1024 * 1024,
-    total_space_gb: 100,
+    free_space_bytes: 100 * 1024 * 1024 * 1024,
+    free_space_gb: 100,
+    total_space_bytes: 200 * 1024 * 1024 * 1024,
+    total_space_gb: 200,
     status: 'ok',
-    message: '50.0 GB free — sufficient for Yeliztli.',
+    message: '100.0 GB free - sufficient for Yeliztli reference setup.',
     path_exists: true,
     path_writable: true,
     ...overrides,
@@ -517,8 +517,8 @@ describe('StorageStep', () => {
     await waitFor(() => {
       expect(screen.getByText('Disk Space OK')).toBeInTheDocument()
     })
-    expect(screen.getByText('50 GB')).toBeInTheDocument()
     expect(screen.getByText('100 GB')).toBeInTheDocument()
+    expect(screen.getByText('200 GB')).toBeInTheDocument()
   })
 
   it('shows warning state for low disk space', async () => {
@@ -528,8 +528,9 @@ describe('StorageStep', () => {
         Promise.resolve(
           mockStorageInfo({
             status: 'warning',
-            free_space_gb: 7,
-            message: 'Low disk space (7.0 GB free).',
+            free_space_gb: 70,
+            message:
+              'Limited disk space (70.0 GB free). Full reference setup can peak above 60 GB; 80 GB or more is recommended.',
           }),
         ),
     })
@@ -548,9 +549,9 @@ describe('StorageStep', () => {
         Promise.resolve(
           mockStorageInfo({
             status: 'blocked',
-            free_space_gb: 2,
+            free_space_gb: 50,
             message:
-              'Insufficient disk space. Yeliztli requires at least 5 GB free. Current: 2.0 GB.',
+              'Insufficient disk space. Full reference setup needs at least 60 GB free because dbNSFP stages a ~50 GB archive while building a ~10+ GB database. Current: 50.0 GB.',
           }),
         ),
     })

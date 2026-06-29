@@ -980,6 +980,61 @@ class TestImportBackup:
 # ═══════════════════════════════════════════════════════════════════════
 
 
+class TestAssessDiskSpace:
+    """Pure unit coverage for the storage threshold policy."""
+
+    def test_blocks_below_full_reference_peak(self) -> None:
+        from backend.api.routes.setup import _assess_disk_space
+
+        status, message = _assess_disk_space(50 * 1024**3)
+
+        assert status == "blocked"
+        assert "60 GB" in message
+        assert "dbNSFP" in message
+
+    def test_warns_without_recommended_headroom(self) -> None:
+        from backend.api.routes.setup import _assess_disk_space
+
+        status, message = _assess_disk_space(70 * 1024**3)
+
+        assert status == "warning"
+        assert "80 GB" in message
+
+    def test_accepts_recommended_headroom(self) -> None:
+        from backend.api.routes.setup import _assess_disk_space
+
+        status, message = _assess_disk_space(100 * 1024**3)
+
+        assert status == "ok"
+        assert "reference setup" in message
+
+    def test_separate_download_staging_uses_split_thresholds(self) -> None:
+        from backend.api.routes.setup import _assess_storage_space
+
+        status, message = _assess_storage_space(
+            25 * 1024**3,
+            100 * 1024**3,
+            staging_separate=True,
+        )
+
+        assert status == "warning"
+        assert "Data directory: 25.0 GB free" in message
+        assert "Download staging: 100.0 GB free" in message
+
+    def test_separate_download_staging_blocks_archive_shortfall(self) -> None:
+        from backend.api.routes.setup import _assess_storage_space
+
+        status, message = _assess_storage_space(
+            35 * 1024**3,
+            45 * 1024**3,
+            staging_separate=True,
+        )
+
+        assert status == "blocked"
+        assert "download staging space" in message
+        assert "50 GB" in message
+
+
 class TestStorageInfo:
     """Tests for the storage info endpoint."""
 
@@ -1029,27 +1084,29 @@ class TestStorageInfo:
         assert data["data_dir"] == str(tmp_data_dir)
 
     def test_blocked_on_low_space(self, setup_client: TestClient) -> None:
-        """Should report 'blocked' when disk space < 5 GB."""
-        # Mock shutil.disk_usage to return very low space
-        low_usage = type("Usage", (), {"free": 2 * 1024**3, "total": 10 * 1024**3})()
+        """Should report 'blocked' when disk space < 60 GB."""
+        low_usage = type("Usage", (), {"free": 50 * 1024**3, "total": 100 * 1024**3})()
         with patch("backend.api.routes.setup.shutil.disk_usage", return_value=low_usage):
             resp = setup_client.get("/api/setup/storage-info")
         data = resp.json()
         assert data["status"] == "blocked"
         assert "insufficient" in data["message"].lower()
+        assert "60 GB" in data["message"]
+        assert "dbNSFP" in data["message"]
 
     def test_warning_on_moderate_space(self, setup_client: TestClient) -> None:
-        """Should report 'warning' when disk space between 5–10 GB."""
-        mid_usage = type("Usage", (), {"free": 7 * 1024**3, "total": 20 * 1024**3})()
+        """Should report 'warning' when disk space is between 60 and 80 GB."""
+        mid_usage = type("Usage", (), {"free": 70 * 1024**3, "total": 100 * 1024**3})()
         with patch("backend.api.routes.setup.shutil.disk_usage", return_value=mid_usage):
             resp = setup_client.get("/api/setup/storage-info")
         data = resp.json()
         assert data["status"] == "warning"
-        assert "low" in data["message"].lower()
+        assert "limited" in data["message"].lower()
+        assert "80 GB" in data["message"]
 
     def test_ok_on_sufficient_space(self, setup_client: TestClient) -> None:
-        """Should report 'ok' when disk space >= 10 GB."""
-        ok_usage = type("Usage", (), {"free": 50 * 1024**3, "total": 100 * 1024**3})()
+        """Should report 'ok' when disk space is >= 80 GB."""
+        ok_usage = type("Usage", (), {"free": 100 * 1024**3, "total": 200 * 1024**3})()
         with patch("backend.api.routes.setup.shutil.disk_usage", return_value=ok_usage):
             resp = setup_client.get("/api/setup/storage-info")
         data = resp.json()
