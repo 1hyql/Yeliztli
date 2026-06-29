@@ -290,6 +290,24 @@ class TestHappyPaths:
         resp = individuals_client.patch(f"/api/individuals/{ind_id}", json={})
         assert resp.status_code == 422
 
+    def test_patch_explicit_null_display_name_returns_422(
+        self, individuals_client: TestClient
+    ) -> None:
+        ind_id = individuals_client.post(
+            "/api/individuals", json={"display_name": "Original"}
+        ).json()["id"]
+
+        resp = individuals_client.patch(
+            f"/api/individuals/{ind_id}",
+            json={"display_name": None},
+        )
+
+        assert resp.status_code == 422
+
+        after = individuals_client.get(f"/api/individuals/{ind_id}")
+        assert after.status_code == 200
+        assert after.json()["display_name"] == "Original"
+
     def test_link_and_unlink_sample(self, individuals_client: TestClient) -> None:
         sample1_id = individuals_client.sample1_id  # type: ignore[attr-defined]
         sample2_id = individuals_client.sample2_id  # type: ignore[attr-defined]
