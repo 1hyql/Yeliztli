@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest"
 import { render, screen } from "./test-utils"
 import VariantDetailPanel from "@/components/carrier/VariantDetailPanel"
 import VariantCard from "@/components/carrier/VariantCard"
-import type { CarrierVariant } from "@/types/carrier"
+import { DEFAULT_COPY_NUMBER_CAVEAT, type CarrierVariant } from "@/types/carrier"
 
 const CFTR_VARIANT: CarrierVariant = {
   rsid: "rs113993960",
@@ -143,6 +143,32 @@ const HBB_VARIANT_CASED_RSID: CarrierVariant = {
   rsid: " RS334 ",
 }
 
+const SMN1_COPY_NUMBER_CAVEAT = DEFAULT_COPY_NUMBER_CAVEAT
+
+const SMN1_VARIANT: CarrierVariant = {
+  rsid: "rs121909192",
+  gene_symbol: "SMN1",
+  genotype: "A/G",
+  zygosity: "het",
+  clinvar_significance: "Pathogenic",
+  clinvar_accession: "VCV000012345",
+  clinvar_review_stars: 2,
+  clinvar_conditions: "Spinal muscular atrophy",
+  conditions: ["Spinal Muscular Atrophy"],
+  inheritance: "AR",
+  evidence_level: 4,
+  cross_links: [],
+  pmids: ["35289093", "21673580"],
+  notes: "Point mutations account for a minority of pathogenic SMN1 alleles.",
+  copy_number_limited: true,
+  copy_number_caveat: SMN1_COPY_NUMBER_CAVEAT,
+}
+
+const SMN1_FLAG_ONLY_VARIANT: CarrierVariant = {
+  ...SMN1_VARIANT,
+  copy_number_caveat: null,
+}
+
 describe("Carrier VariantDetailPanel", () => {
   it("keeps classic AR carrier wording for CFTR", () => {
     render(
@@ -207,6 +233,43 @@ describe("Carrier VariantDetailPanel", () => {
     expect(screen.getByText(/kidney findings/i)).toBeInTheDocument()
     expect(screen.getByText(/exertional-stress/i)).toBeInTheDocument()
     expect(screen.getByText(/family planning/i)).toBeInTheDocument()
+  })
+
+  it("shows SMN1 copy-number limitation instead of plain unaffected carrier wording", () => {
+    render(
+      <VariantDetailPanel
+        variant={SMN1_VARIANT}
+        sampleId={1}
+        geneNote={undefined}
+        onClose={vi.fn()}
+      />,
+    )
+
+    const panel = screen.getByTestId("carrier-detail-panel")
+    const caveatPanel = screen.getByTestId("carrier-copy-number-caveat-panel")
+    const describedBy = panel.getAttribute("aria-describedby")
+    expect(caveatPanel).toBeInTheDocument()
+    expect(describedBy).toBeTruthy()
+    expect(document.getElementById(describedBy as string)).toBe(caveatPanel)
+    expect(screen.getByText(/copy-number not assessed/i)).toBeInTheDocument()
+    expect(screen.getByText(/dosage\/CNV assessment/i)).toBeInTheDocument()
+    expect(screen.queryByText(/typically unaffected/i)).not.toBeInTheDocument()
+  })
+
+  it("uses the default SMN1 copy-number caveat when only the limitation flag is set", () => {
+    render(
+      <VariantDetailPanel
+        variant={SMN1_FLAG_ONLY_VARIANT}
+        sampleId={1}
+        geneNote={undefined}
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByTestId("carrier-copy-number-caveat-panel")).toHaveTextContent(
+      /SMN1 exon 7 dosage\/copy-number/i,
+    )
+    expect(screen.queryByText(/typically unaffected/i)).not.toBeInTheDocument()
   })
 
   it("normalizes HBB HbS rsid casing and whitespace", () => {
@@ -343,5 +406,26 @@ describe("Carrier VariantCard genotype-line label (#540)", () => {
     const card = screen.getByTestId("carrier-variant-card")
     expect(card.getAttribute("aria-label")).toMatch(/homozygous affected-status finding/i)
     expect(card.getAttribute("aria-label")).not.toMatch(/carrier/i)
+  })
+
+  it("shows SMN1 copy-number limitation on carrier cards", () => {
+    render(<VariantCard variant={SMN1_VARIANT} onClick={vi.fn()} sampleId={1} />)
+
+    const card = screen.getByTestId("carrier-variant-card")
+    const caveat = screen.getByTestId("carrier-copy-number-caveat")
+    const describedBy = card.getAttribute("aria-describedby")
+    expect(caveat).toBeInTheDocument()
+    expect(describedBy).toBeTruthy()
+    expect(document.getElementById(describedBy as string)).toBe(caveat)
+    expect(screen.getByText(/copy-number not assessed/i)).toBeInTheDocument()
+    expect(screen.getByText(/dosage\/CNV assessment/i)).toBeInTheDocument()
+  })
+
+  it("uses the default SMN1 copy-number caveat on cards when only the flag is set", () => {
+    render(<VariantCard variant={SMN1_FLAG_ONLY_VARIANT} onClick={vi.fn()} sampleId={1} />)
+
+    expect(screen.getByTestId("carrier-copy-number-caveat")).toHaveTextContent(
+      /SMN1 exon 7 dosage\/copy-number/i,
+    )
   })
 })
