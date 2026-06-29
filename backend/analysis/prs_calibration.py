@@ -228,6 +228,129 @@ def get_ancestry_fractions(sample_engine: sa.Engine) -> dict[str, float] | None:
     return {pop: f / total for pop, f in fracs.items() if f and f > 0}
 
 
+def _variant_entry(
+    ref: str, alt: str, per_pop_alt_af: dict[str, float | None], weight: dict
+) -> dict:
+    """Shape a calibration variant entry from a weight + its ref/alt + per-pop AF."""
+    return {
+        "effect_allele": weight["effect_allele"],
+        "other_allele": weight.get("other_allele"),
+        "ref": ref,
+        "alt": alt,
+        "weight": weight["weight"],
+        "per_pop_alt_af": per_pop_alt_af,
+    }
+
+
+def _pair_orients(effect_allele: str, other_allele: str | None, ref: str, alt: str) -> bool:
+    """Whether a weight can be oriented against ``{ref, alt}`` to pick its record at
+    a multi-allelic locus. The per-sample near-0.5 palindrome drop is applied later
+    by :func:`effect_allele_frequency`, not here.
+
+    With ``other_allele`` the ``{effect, other}`` pair must match ``{ref, alt}`` on
+    the reference or complemented strand (same harmonization as scoring). Without it
+    (legacy weights), only a **same-strand** literal match counts — mirroring
+    ``effect_allele_frequency``'s no-strand-attempt path, so any record this accepts
+    also yields a frequency there (a complement-only match would pass the
+    resolve-count check yet be dropped from the moments, re-opening the #1236 bias).
+    """
+    ea = _single_base(effect_allele)
+    ref_u = _single_base(ref)
+    alt_u = _single_base(alt)
+    if ea is None or ref_u is None or alt_u is None:
+        return False
+    pair = {ref_u, alt_u}
+    oa = _single_base(other_allele)
+    if oa is None:
+        return ea in pair
+    return {ea, oa} == pair or {COMPLEMENT[ea], COMPLEMENT[oa]} == pair
+
+
+def _resolve_imputed_against_reference(
+    weights: list[dict],
+    sample_engine: sa.Engine,
+    reference_engine: sa.Engine,
+    af_cols: list[str],
+) -> list[dict]:
+    """Build calibration entries for scored variants absent from annotated_variants.
+
+    These are the imputed-only contributions SW-C5 adds to the raw score (#1236).
+    Their ref/alt come from the sample's ``imputed_variants``; their per-population
+    gnomAD AF from the reference DB (``lookup_gnomad_by_positions``). A variant
+    whose ref/alt or gnomAD AF can't be sourced is left out — it then sits in the
+    same coverage-tolerance bucket as before, never standardized over wrong moments.
+    """
+    from backend.annotation.gnomad import lookup_gnomad_by_positions
+    from backend.db.tables import imputed_variants
+
+    # (normalized chrom, pos) → weights at that locus.
+    by_locus: dict[tuple[str, int], list[dict]] = {}
+    for w in weights:
+        chrom = _norm_chrom(w.get("chrom"))
+        pos = w.get("pos")
+        if chrom is not None and pos is not None:
+            by_locus.setdefault((chrom, pos), []).append(w)
+    if not by_locus:
+        return []
+
+    # ref/alt candidates per locus from the sample's imputed_variants. A position
+    # can carry more than one alt, so collect the full set and match each weight to
+    # the right one below — never an arbitrary last-write-wins choice.
+    ref_alts: dict[tuple[str, int], set[tuple[str, str]]] = {}
+    pos_values = sorted({pos for (_chrom, pos) in by_locus})
+    with sample_engine.connect() as conn:
+        if not sa.inspect(conn).has_table(imputed_variants.name):
+            return []
+        for i in range(0, len(pos_values), _POSITION_BATCH_SIZE):
+            batch = pos_values[i : i + _POSITION_BATCH_SIZE]
+            stmt = sa.select(
+                imputed_variants.c.chrom,
+                imputed_variants.c.pos,
+                imputed_variants.c.ref,
+                imputed_variants.c.alt,
+            ).where(imputed_variants.c.pos.in_(batch))
+            for r in conn.execute(stmt):
+                key = (_norm_chrom(r.chrom), r.pos)
+                if key in by_locus and r.ref and r.alt:
+                    ref_alts.setdefault(key, set()).add((r.ref, r.alt))
+    if not ref_alts:
+        return []
+
+    # Per-pop gnomAD AF by (chrom, pos, ref, alt). chrom is already normalized to
+    # the gnomad_af store form (strip "chr", upper) so the exact-tuple match lands.
+    positions = [
+        (chrom, pos, ref, alt)
+        for (chrom, pos), alleles in ref_alts.items()
+        for (ref, alt) in alleles
+    ]
+    annotations = lookup_gnomad_by_positions(positions, reference_engine)
+
+    entries: list[dict] = []
+    for (chrom, pos), weights_at_locus in by_locus.items():
+        # gnomAD-annotated (ref, alt, per_pop) candidates at this locus.
+        candidates: list[tuple[str, str, dict[str, float | None]]] = []
+        for ref, alt in ref_alts.get((chrom, pos), set()):
+            ann = annotations.get((chrom, pos, ref, alt))
+            if ann is None:
+                continue
+            # af_cols are gnomad_af_<pop>; the annotation exposes them as af_<pop>.
+            per_pop = {col: getattr(ann, col.removeprefix("gnomad_"), None) for col in af_cols}
+            candidates.append((ref, alt, per_pop))
+        for w in weights_at_locus:
+            # Pick the unique candidate whose allele pair orients this weight (on
+            # either strand). 0 or >1 → leave the weight unresolved; the caller then
+            # withholds rather than calibrate over a set missing a scored variant.
+            matches = [
+                c
+                for c in candidates
+                if _pair_orients(w["effect_allele"], w.get("other_allele"), c[0], c[1])
+            ]
+            if len(matches) == 1:
+                ref, alt, per_pop = matches[0]
+                entries.append(_variant_entry(ref, alt, per_pop, w))
+    return entries
+
+
 def continuous_reference_distribution(
     weights: list[dict],
     sample_engine: sa.Engine,
@@ -240,6 +363,14 @@ def continuous_reference_distribution(
     ref/alt and per-population gnomAD AFs are read from the sample's
     ``annotated_variants``. Returns ``None`` if ancestry is unknown or too few
     variants have a usable AF.
+
+    When ``reference_engine`` is supplied, scored variants that are **absent from
+    ``annotated_variants``** — the imputed-only contributions SW-C5 adds to the
+    raw score (#1236) — are resolved against the gnomAD reference: their ref/alt
+    come from the sample's ``imputed_variants`` and their per-population gnomAD AF
+    from the reference DB. This keeps the expected distribution over the *same*
+    typed+imputed set the raw score used; without it, imputed contributions would
+    inflate the raw score but be missing from the moments, biasing the z-score.
     """
     from backend.db.tables import annotated_variants
 
@@ -290,25 +421,37 @@ def continuous_reference_distribution(
                         rows_by_pos[key] = r
 
     variants: list[dict] = []
+    unresolved: list[dict] = []
 
-    def _append_variant(row: sa.Row | None, weight: dict) -> None:
+    def _append_from_annotated(row: sa.Row | None, weight: dict) -> None:
+        # Scored variants missing from annotated_variants (imputed-only) are held
+        # for reference-DB resolution rather than silently dropped (#1236).
         if row is None or row.ref is None or row.alt is None:
+            unresolved.append(weight)
             return
         variants.append(
-            {
-                "effect_allele": weight["effect_allele"],
-                "other_allele": weight.get("other_allele"),
-                "ref": row.ref,
-                "alt": row.alt,
-                "weight": weight["weight"],
-                "per_pop_alt_af": {c: getattr(row, c) for c in af_cols},
-            }
+            _variant_entry(row.ref, row.alt, {c: getattr(row, c) for c in af_cols}, weight)
         )
 
     for rsid, w in by_rsid.items():
-        _append_variant(rows_by_rsid.get(rsid), w)
+        _append_from_annotated(rows_by_rsid.get(rsid), w)
     for key, w in by_pos.items():
-        _append_variant(rows_by_pos.get(key), w)
+        _append_from_annotated(rows_by_pos.get(key), w)
+
+    if reference_engine is not None and unresolved:
+        resolved = _resolve_imputed_against_reference(
+            unresolved, sample_engine, reference_engine, af_cols
+        )
+        # Every scored variant absent from annotated_variants must be calibrated
+        # against the reference; the helper emits exactly one entry per resolvable
+        # weight, so a shortfall means a scored imputed contribution could not be
+        # resolved (no imputed ref/alt, no gnomAD row, or an unorientable/ambiguous
+        # pair). Withhold rather than standardize the raw score — which includes it
+        # — over moments that omit it (#1236); the typed-only coverage gate could
+        # otherwise still pass on a mixed set and re-introduce the bias.
+        if len(resolved) != len(unresolved):
+            return None
+        variants.extend(resolved)
 
     mean, std, n_used = expected_prs_mean_sd(variants, fractions)
     variants_total = len(by_rsid) + len(by_pos)
