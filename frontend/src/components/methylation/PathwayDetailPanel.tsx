@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useRef, useState } from "react"
+import { useDialogFocus } from "@/hooks/useDialogFocus"
 import { cn } from "@/lib/utils"
 import { useMethylationPathwayDetail } from "@/api/methylation"
 import EvidenceStars from "@/components/ui/EvidenceStars"
@@ -112,16 +113,13 @@ export default function PathwayDetailPanel({
   onClose,
 }: PathwayDetailPanelProps) {
   const detailQuery = useMethylationPathwayDetail(pathwayId, sampleId)
-  const closeRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLElement>(null)
+  useDialogFocus(panelRef)
   const [showAdvanced, setShowAdvanced] = useState(false)
   const noCallSnps = detailQuery.data?.no_call_snps ?? []
   const offChipSnps = (detailQuery.data?.missing_snps ?? []).filter(
     (rsid) => !noCallSnps.includes(rsid),
   )
-
-  useEffect(() => {
-    closeRef.current?.focus()
-  }, [])
 
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
@@ -139,9 +137,11 @@ export default function PathwayDetailPanel({
         "flex flex-col",
         "animate-in slide-in-from-right duration-200",
       )}
+      ref={panelRef}
       role="dialog"
       aria-modal="true"
       aria-label={`${pathwayName} pathway details`}
+      tabIndex={-1}
     >
       {/* Header */}
       <div className="flex items-center justify-between gap-2 border-b px-6 py-4">
@@ -168,7 +168,6 @@ export default function PathwayDetailPanel({
           )}
         </div>
         <button
-          ref={closeRef}
           onClick={onClose}
           className="rounded-md p-1.5 hover:bg-muted transition-colors"
           aria-label="Close pathway details"
