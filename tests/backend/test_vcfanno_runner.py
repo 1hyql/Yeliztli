@@ -122,6 +122,24 @@ class TestParseVcfOverlay:
         assert result.records[0].annotations["AF"] == 0.05
         assert result.records[0].annotations["CLNSIG"] == "pathogenic"
 
+    def test_vcf_multialt_info_is_projected_per_alt(self) -> None:
+        """Multi-ALT records are split with allele-counted INFO projected by index."""
+        content = (
+            "##fileformat=VCFv4.2\n"
+            '##INFO=<ID=AF,Number=A,Type=Float,Description="Allele frequency">\n'
+            '##INFO=<ID=AD,Number=R,Type=Integer,Description="Allele depths">\n'
+            '##INFO=<ID=DP,Number=1,Type=Integer,Description="Read depth">\n'
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+            "1\t200000\t.\tC\tG,T\t.\tPASS\tAF=0.1,0.2;AD=7,3,9;DP=19;DB\n"
+        )
+
+        result = parse_vcf_overlay(content)
+
+        assert result.record_count == 2
+        assert [record.alt for record in result.records] == ["G", "T"]
+        assert result.records[0].annotations == {"AF": 0.1, "AD": 3, "DP": 19, "DB": True}
+        assert result.records[1].annotations == {"AF": 0.2, "AD": 9, "DP": 19, "DB": True}
+
     def test_vcf_flag_fields(self) -> None:
         """VCF flag fields (no value) are parsed as True."""
         content = (
@@ -394,6 +412,91 @@ class TestApplyOverlay:
         assert results["rsT"]["SCORE"] == 0.1  # not cross-attached from the C>G record
         assert len(results) == 2
 
+    def test_vcf_multialt_number_a_info_attaches_per_allele(
+        self, sample_engine: sa.Engine
+    ) -> None:
+        """Number=A INFO values from multi-ALT VCF records attach by ALT index (#1268)."""
+        from backend.annotation.vcfanno_runner import get_overlay_results
+        from backend.db.tables import annotated_variants
+
+        with sample_engine.begin() as conn:
+            conn.execute(
+                sa.insert(annotated_variants),
+                [
+                    {
+                        "rsid": "rsG",
+                        "chrom": "1",
+                        "pos": 200000,
+                        "ref": "C",
+                        "alt": "G",
+                        "genotype": "CG",
+                        "annotation_coverage": 0,
+                    },
+                    {
+                        "rsid": "rsT",
+                        "chrom": "1",
+                        "pos": 200000,
+                        "ref": "C",
+                        "alt": "T",
+                        "genotype": "CT",
+                        "annotation_coverage": 0,
+                    },
+                ],
+            )
+        content = (
+            "##fileformat=VCFv4.2\n"
+            '##INFO=<ID=AF,Number=A,Type=Float,Description="Allele frequency">\n'
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+            "1\t200000\t.\tC\tG,T\t.\tPASS\tAF=0.1,0.2\n"
+        )
+        parsed = parse_vcf_overlay(content)
+        apply_overlay(parsed, 8, "Multi-ALT", sample_engine)
+
+        results = {r["rsid"]: r for r in get_overlay_results(8, sample_engine)}
+        assert results["rsG"]["AF"] == 0.1
+        assert results["rsT"]["AF"] == 0.2
+        assert len(results) == 2
+
+    def test_vcf_multialt_position_fallback_keeps_unprojected_info(
+        self, sample_engine: sa.Engine
+    ) -> None:
+        """Raw-only fallback keeps full multi-ALT INFO because sample ALT is unknown."""
+        from backend.annotation.vcfanno_runner import get_overlay_results
+        from backend.db.tables import raw_variants
+
+        with sample_engine.begin() as conn:
+            conn.execute(
+                sa.insert(raw_variants),
+                [
+                    {
+                        "rsid": "rsRaw",
+                        "chrom": "1",
+                        "pos": 200000,
+                        "genotype": "CT",
+                    }
+                ],
+            )
+        content = (
+            "##fileformat=VCFv4.2\n"
+            '##INFO=<ID=AF,Number=A,Type=Float,Description="Allele frequency">\n'
+            '##INFO=<ID=AD,Number=R,Type=Integer,Description="Allele depths">\n'
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+            "1\t200000\t.\tC\tG,T\t.\tPASS\tAF=0.1,0.2;AD=7,3,9\n"
+        )
+        parsed = parse_vcf_overlay(content)
+        result = apply_overlay(parsed, 9, "Raw fallback", sample_engine)
+
+        results = get_overlay_results(9, sample_engine)
+        assert result.variants_matched == 1
+        assert results == [
+            {
+                "rsid": "rsRaw",
+                "overlay_id": 9,
+                "AF": "0.1,0.2",
+                "AD": "7,3,9",
+            }
+        ]
+
     def test_vcf_allele_aware_skips_uncarried_alt(self, sample_engine: sa.Engine) -> None:
         """A VCF overlay allele the sample doesn't carry attaches to nothing, even though
         a different ALT exists at the same coordinate (issue #1228)."""
@@ -420,7 +523,7 @@ class TestApplyOverlay:
             "1\t200000\t.\tC\tA\t.\tPASS\tSCORE=0.5\n"  # sample carries C>G, not C>A
         )
         parsed = parse_vcf_overlay(content)
-        result = apply_overlay(parsed, 8, "Uncarried", sample_engine)
+        result = apply_overlay(parsed, 10, "Uncarried", sample_engine)
         assert result.variants_matched == 0
 
     def test_vcf_falls_back_to_position_when_alleles_null(self, sample_engine: sa.Engine) -> None:
@@ -453,5 +556,5 @@ class TestApplyOverlay:
             "1\t300000\t.\tC\tG\t.\tPASS\tSCORE=0.7\n"
         )
         parsed = parse_vcf_overlay(content)
-        result = apply_overlay(parsed, 9, "Null-allele fallback", sample_engine)
+        result = apply_overlay(parsed, 11, "Null-allele fallback", sample_engine)
         assert result.variants_matched == 1  # position-only fallback, not zero
