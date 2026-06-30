@@ -84,14 +84,26 @@ function UploadPanel() {
   const [description, setDescription] = useState("")
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [dragOver, setDragOver] = useState(false)
+  const [fileError, setFileError] = useState<string | null>(null)
 
   const uploadMutation = useUploadOverlay()
   const previewMutation = useParseOverlayPreview()
 
   const handleFileSelect = (file: File) => {
+    // Guard both entry points: the picker's `accept` only filters the OS dialog,
+    // so a *dropped* file can still be an unsupported type. The backend reads
+    // uploads as UTF-8 text with no gzip path, so reject anything but plain-text
+    // .bed/.vcf here with a clear message rather than a confusing 400 (#1299).
+    if (!/\.(bed|vcf)$/i.test(file.name)) {
+      setSelectedFile(null)
+      setFileError("Only plain-text .bed and .vcf files are supported.")
+      previewMutation.reset()
+      return
+    }
+    setFileError(null)
     setSelectedFile(file)
     if (!name) {
-      setName(file.name.replace(/\.(bed|vcf|vcf\.gz)$/i, ""))
+      setName(file.name.replace(/\.(bed|vcf)$/i, ""))
     }
     previewMutation.mutate(file)
   }
@@ -149,7 +161,10 @@ function UploadPanel() {
         <input
           ref={fileInputRef}
           type="file"
-          accept=".bed,.vcf,.vcf.gz"
+          // Plain-text only: the backend reads uploads as UTF-8 text with no gzip
+          // path, so do not advertise .vcf.gz here (#1299). Bounded-gzip support
+          // is tracked as a follow-up.
+          accept=".bed,.vcf"
           className="hidden"
           onChange={(e) => {
             const file = e.target.files?.[0]
@@ -157,6 +172,9 @@ function UploadPanel() {
           }}
         />
       </button>
+
+      {/* Rejected file type (unsupported extension, e.g. a dropped .vcf.gz) */}
+      {fileError && <p className="text-sm text-destructive">{fileError}</p>}
 
       {/* Preview error */}
       {previewMutation.isError && (
