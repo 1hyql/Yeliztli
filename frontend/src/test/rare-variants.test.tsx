@@ -23,6 +23,7 @@ function makeMockVariant(overrides: Partial<RareVariant> = {}): RareVariant {
     alt: "G",
     genotype: "AG",
     zygosity: "het",
+    zygosity_label: "Heterozygous",
     gene_symbol: "BRCA1",
     consequence: "missense_variant",
     hgvs_coding: "c.1234A>G",
@@ -147,16 +148,45 @@ describe("ResultsTable", () => {
         gene_symbol: "TP53",
         evidence_level: 2,
         zygosity: "hom_alt",
+        zygosity_label: "Homozygous",
       }),
     ]
     render(<ResultsTable items={variants} selectedRsid={null} onSelect={vi.fn()} />)
     expect(screen.getAllByTestId("result-row")).toHaveLength(2)
     expect(screen.getByText("BRCA1")).toBeInTheDocument()
     expect(screen.getByText("TP53")).toBeInTheDocument()
-    // Zygosity labels: het → "Het", hom_alt → "Hom". A label inversion would
-    // render a het carrier as homozygous (a clinically wrong call).
-    expect(screen.getByText("Het")).toBeInTheDocument()
-    expect(screen.getByText("Hom")).toBeInTheDocument()
+    // Backend-provided labels: het → "Heterozygous", hom_alt → "Homozygous".
+    expect(screen.getByText("Heterozygous")).toBeInTheDocument()
+    expect(screen.getByText("Homozygous")).toBeInTheDocument()
+  })
+
+  it("does not infer ploidy when the backend label is absent", () => {
+    const variant = makeMockVariant({ zygosity: "hom_alt", zygosity_label: null })
+    render(<ResultsTable items={[variant]} selectedRsid={null} onSelect={vi.fn()} />)
+    expect(screen.queryByText("Homozygous")).not.toBeInTheDocument()
+  })
+
+  it("renders backend ploidy-aware zygosity labels", () => {
+    const variants = [
+      makeMockVariant({
+        rsid: "rs_x",
+        chrom: "X",
+        pos: 10_000_000,
+        zygosity: "hom_alt",
+        zygosity_label: "Hemizygous",
+      }),
+      makeMockVariant({
+        rsid: "rs_mt",
+        chrom: "MT",
+        pos: 3_012,
+        zygosity: "hom_alt",
+        zygosity_label: "Homoplasmic",
+      }),
+    ]
+    render(<ResultsTable items={variants} selectedRsid={null} onSelect={vi.fn()} />)
+    expect(screen.getByText("Hemizygous")).toBeInTheDocument()
+    expect(screen.getByText("Homoplasmic")).toBeInTheDocument()
+    expect(screen.queryByText("Hom")).not.toBeInTheDocument()
   })
 
   it("calls onSelect when row is clicked", async () => {
@@ -283,10 +313,17 @@ describe("VariantDetailPanel", () => {
   })
 
   it("renders the homozygous zygosity label", () => {
-    const variant = makeMockVariant({ zygosity: "hom_alt" })
+    const variant = makeMockVariant({ zygosity: "hom_alt", zygosity_label: "Homozygous" })
     render(<VariantDetailPanel variant={variant} onClose={vi.fn()} />)
     expect(screen.getByText("Homozygous")).toBeInTheDocument()
     expect(screen.queryByText("Heterozygous")).not.toBeInTheDocument()
+  })
+
+  it("renders ploidy-aware labels in the detail panel", () => {
+    const variant = makeMockVariant({ zygosity: "hom_alt", zygosity_label: "Hemizygous" })
+    render(<VariantDetailPanel variant={variant} onClose={vi.fn()} />)
+    expect(screen.getByText("Hemizygous")).toBeInTheDocument()
+    expect(screen.queryByText("Homozygous")).not.toBeInTheDocument()
   })
 
   it("calls onClose when close button clicked", async () => {
@@ -423,6 +460,7 @@ describe("RareVariantsView", () => {
               evidence_level: 4,
               finding_text: "Pathogenic variant in BRCA1",
               zygosity: "het",
+              zygosity_label: "Heterozygous",
               clinvar_significance: "Pathogenic",
               conditions: "Breast cancer",
               detail: {},
@@ -440,6 +478,7 @@ describe("RareVariantsView", () => {
     })
     expect(screen.getByText("BRCA1")).toBeInTheDocument()
     expect(screen.getByText("Previous Findings")).toBeInTheDocument()
+    expect(screen.getAllByText("Heterozygous").length).toBeGreaterThan(0)
   })
 
   it("renders the 0★ clinvar_pathogenic_low_confidence category with a friendly label, not the raw key (#919)", async () => {
