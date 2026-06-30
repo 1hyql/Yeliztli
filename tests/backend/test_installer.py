@@ -98,6 +98,34 @@ class TestRenderPlist:
         assert "~/Library/Logs" not in rendered
         assert str(installer.LOG_DIR_MACOS) in rendered
 
+    def test_replaces_python_placeholder(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        plist = tmp_path / "test.plist"
+        plist.write_text("<array><string>__PYTHON__</string><string>-m</string></array>")
+        monkeypatch.setattr(installer, "_find_python", lambda: "/opt/python/bin/python")
+
+        rendered = installer._render_plist(plist, Path("/opt/gi"))
+
+        assert "__PYTHON__" not in rendered
+        assert "/opt/python/bin/python" in rendered
+
+    def test_xml_escapes_inserted_values(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        plist = tmp_path / "test.plist"
+        plist.write_text(
+            "<dict>\n"
+            "  <string>__INSTALL_DIR__</string>\n"
+            "  <string>__PYTHON__</string>\n"
+            "  <string>~/Library/Logs/test.log</string>\n"
+            "</dict>\n"
+        )
+        monkeypatch.setattr(installer, "_find_python", lambda: "/opt/Python & Co/bin/python")
+        monkeypatch.setattr(installer, "LOG_DIR_MACOS", Path("/Users/A & B/Library/Logs"))
+
+        rendered = installer._render_plist(plist, Path("/opt/Yeliztli & Data"))
+
+        assert "/opt/Yeliztli &amp; Data" in rendered
+        assert "/opt/Python &amp; Co/bin/python" in rendered
+        assert "/Users/A &amp; B/Library/Logs/test.log" in rendered
+
 
 # ── Systemd rendering ─────────────────────────────────────
 
@@ -127,6 +155,34 @@ class TestRenderSystemdUnit:
         assert "%h" not in rendered
         home_dir = str(Path.home())
         assert f"{home_dir}/.local/bin" in rendered
+
+    def test_replaces_python_placeholder(self, tmp_path: Path):
+        unit = tmp_path / "test.service"
+        unit.write_text(
+            "[Service]\n"
+            "ExecStart=__PYTHON__ -m backend.main\n"
+            "Environment=PATH=%h/.local/bin:/usr/bin\n"
+        )
+
+        rendered = installer._render_systemd_unit(unit, Path("/home/user/gi"))
+
+        assert "__PYTHON__" not in rendered
+        assert f'ExecStart="{installer._find_python()}" -m backend.main' in rendered
+
+    def test_quotes_python_placeholder_with_spaces(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        unit = tmp_path / "test.service"
+        unit.write_text(
+            "[Service]\n"
+            "ExecStart=__PYTHON__ -m backend.main\n"
+            "Environment=PATH=%h/.local/bin:/usr/bin\n"
+        )
+        monkeypatch.setattr(installer, "_find_python", lambda: "/tmp/Python Dir/python")
+
+        rendered = installer._render_systemd_unit(unit, Path("/home/user/gi"))
+
+        assert 'ExecStart="/tmp/Python Dir/python" -m backend.main' in rendered
 
 
 # ── Health check ───────────────────────────────────────────
@@ -202,15 +258,18 @@ class TestInstallFlow:
         mock_plat: MagicMock,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
     ):
         """Install on Linux without systemd prints manual instructions."""
         monkeypatch.setattr(installer, "DATA_DIR", tmp_path / ".yeliztli")
+        monkeypatch.setattr(installer, "_find_python", lambda: "/tmp/Python Dir/python")
 
         ns = argparse.Namespace(skip_pip=True, skip_frontend=True)
         result = installer.cmd_install(ns)
 
         assert result == 0
         assert (tmp_path / ".yeliztli").is_dir()
+        assert "    '/tmp/Python Dir/python' -m backend.main &" in capsys.readouterr().out
 
     @patch("backend.installer._detect_platform", return_value="macos")
     @patch("subprocess.run")

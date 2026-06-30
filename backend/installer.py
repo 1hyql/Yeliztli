@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import argparse
 import platform
+import shlex
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+from xml.sax.saxutils import escape as xml_escape
 
 # ── Constants ──────────────────────────────────────────────
 
@@ -115,9 +117,10 @@ def build_frontend() -> bool:
 def _render_plist(template_path: Path, install_dir: Path) -> str:
     """Render a launchd plist template, replacing __INSTALL_DIR__."""
     content = template_path.read_text()
-    content = content.replace("__INSTALL_DIR__", str(install_dir))
+    content = content.replace("__INSTALL_DIR__", xml_escape(str(install_dir)))
+    content = content.replace("__PYTHON__", xml_escape(_find_python()))
     # Expand ~ in log paths to absolute home
-    content = content.replace("~/Library/Logs", str(LOG_DIR_MACOS))
+    content = content.replace("~/Library/Logs", xml_escape(str(LOG_DIR_MACOS)))
     return content
 
 
@@ -179,6 +182,11 @@ def status_launchd() -> None:
 # ── Linux/WSL2 systemd ────────────────────────────────────
 
 
+def _quote_systemd_exec_arg(value: str) -> str:
+    """Quote one systemd ExecStart argument."""
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 def _has_systemd() -> bool:
     """Check if systemd is available (user session)."""
     result = subprocess.run(
@@ -200,8 +208,10 @@ def _render_systemd_unit(template_path: Path, install_dir: Path) -> str:
     home_dir = str(Path.home())
     # Replace %h/Yeliztli with the actual install dir
     content = content.replace("%h/Yeliztli", str(install_dir))
+    python_path = _find_python()
+    content = content.replace("__PYTHON__", _quote_systemd_exec_arg(python_path))
     # Ensure PATH includes common Python install locations with expanded home
-    python_bin_dir = str(Path(_find_python()).parent)
+    python_bin_dir = str(Path(python_path).parent)
     content = content.replace(
         "Environment=PATH=%h/.local/bin:/usr/bin",
         f"Environment=PATH={python_bin_dir}:{home_dir}/.local/bin:/usr/local/bin:/usr/bin",
@@ -220,7 +230,7 @@ def install_systemd() -> None:
         print()
         print("  You can still run Yeliztli manually:")
         print(f"    cd {_repo_root()}")
-        print("    uvicorn backend.main:app --host 127.0.0.1 --port 8000 &")
+        print(f"    {shlex.quote(_find_python())} -m backend.main &")
         print("    huey_consumer backend.tasks.huey_tasks.huey -w 1 &")
         return
 
@@ -333,7 +343,10 @@ def cmd_install(args: argparse.Namespace) -> int:
 
     print("Installation complete!")
     print(f"  Data directory: {DATA_DIR}")
-    print("  API server:     http://127.0.0.1:8000")
+    from backend.config import get_settings
+
+    settings = get_settings()
+    print(f"  API server:     http://{settings.host}:{settings.port}")
     print("  Open in browser to start the setup wizard.")
     return 0
 
