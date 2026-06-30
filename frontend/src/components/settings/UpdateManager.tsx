@@ -32,6 +32,7 @@ import {
   useDatabaseHealth,
   type DatabaseHealth,
 } from '@/api/db-health'
+import { useUpdateCheckInterval, useSetUpdateCheckInterval } from '@/api/preferences'
 import { cn } from '@/lib/utils'
 import {
   RefreshCw,
@@ -563,7 +564,10 @@ function DatabaseRow({
 // ── App version row ─────────────────────────────────────────────────
 
 function AppVersionRow() {
-  const { data: appUpdate } = useAppUpdate()
+  // Gate the GitHub app-version check on the "Automatically check for updates"
+  // toggle (#1287), consistent with the per-DB checks above and StatusBar.
+  const { data: updateInterval } = useUpdateCheckInterval()
+  const { data: appUpdate } = useAppUpdate(updateInterval?.update_check_interval !== 'off')
   if (!appUpdate) return null
 
   const hasUpdate = appUpdate.update_available && appUpdate.latest_version
@@ -773,7 +777,21 @@ function HistorySection({
 export default function UpdateManager() {
   const queryClient = useQueryClient()
   const { data: statuses, isLoading: statusLoading } = useDatabaseStatuses()
-  const { data: updateCheck, isLoading: checkLoading, refetch: recheckUpdates } = useUpdateCheck(true)
+  // "Automatically check for updates" master toggle (#1287). update_check_interval
+  // "off" stops all automatic outbound update/version checks; toggling on restores
+  // the "daily" default. Defaults to on while the preference is loading (and if the
+  // endpoint is unavailable) so the update UI degrades gracefully; the backend
+  // short-circuits the checks when off, so this never leaks an outbound request.
+  const { data: updateInterval } = useUpdateCheckInterval()
+  const setUpdateCheckInterval = useSetUpdateCheckInterval()
+  const autoCheckEnabled = updateInterval?.update_check_interval !== 'off'
+  // Gate the automatic check on the toggle (mirrors StatusBar). The manual "Check
+  // for updates" button below still works — refetch() ignores `enabled`.
+  const {
+    data: updateCheck,
+    isLoading: checkLoading,
+    refetch: recheckUpdates,
+  } = useUpdateCheck(autoCheckEnabled)
   const { data: prompts } = useReannotationPrompts()
   const { data: health } = useDatabaseHealth()
   const triggerMutation = useTriggerUpdate()
@@ -832,6 +850,39 @@ export default function UpdateManager() {
         >
           <RefreshCw className={cn('h-3.5 w-3.5', checkLoading && 'animate-spin')} />
           Check for updates
+        </button>
+      </div>
+
+      {/* Automatically check for updates — master toggle (#1287) */}
+      <div className="flex items-center justify-between rounded-md border border-border px-4 py-3">
+        <div className="min-w-0 pr-4">
+          <p className="text-sm font-medium">Automatically check for updates</p>
+          <p className="text-xs text-muted-foreground">
+            When off, Yeliztli makes no automatic outbound update or version checks.
+            You can still check manually with the button above.
+          </p>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={autoCheckEnabled}
+          aria-label="Automatically check for updates"
+          onClick={() => setUpdateCheckInterval.mutate(autoCheckEnabled ? 'off' : 'daily')}
+          disabled={setUpdateCheckInterval.isPending}
+          className={cn(
+            'relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors',
+            'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary',
+            'disabled:opacity-50 disabled:cursor-not-allowed',
+            autoCheckEnabled ? 'bg-primary' : 'bg-muted-foreground/30',
+          )}
+        >
+          <span
+            className={cn(
+              'inline-block h-4 w-4 rounded-full bg-white dark:bg-foreground shadow transition-transform',
+              'translate-y-0.5',
+              autoCheckEnabled ? 'translate-x-4' : 'translate-x-0.5',
+            )}
+          />
         </button>
       </div>
 
