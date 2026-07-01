@@ -2,7 +2,7 @@
  * @vitest-environment happy-dom
  */
 import { act } from "react"
-import { describe, it, expect, vi, beforeEach, afterAll } from "vitest"
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from "vitest"
 import { render, screen, waitFor } from "@/test/test-utils"
 import userEvent from "@testing-library/user-event"
 import GenomeBrowser from "./GenomeBrowser"
@@ -23,11 +23,28 @@ beforeEach(() => {
   // the one-time reference-fetch disclosure gate (#1286) — pre-acknowledge it so
   // IGV initializes. The gate itself is covered in IgvBrowser.test.tsx.
   localStorage.setItem(GENOME_BROWSER_REFERENCE_DISCLOSURE_KEY, "acknowledged")
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({
+        available: false,
+        mode: "remote",
+        reference: null,
+        tracks: [],
+        missing: ["GRCh37 FASTA (grch37.fa)", "RefSeq BED track (grch37_refseq.bed)"],
+      }),
+    }),
+  )
   mockCreateBrowser.mockResolvedValue(mockBrowser)
   __setIgvForTesting({
     createBrowser: mockCreateBrowser,
     removeBrowser: mockRemoveBrowser,
   })
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
 })
 
 afterAll(() => {
@@ -51,18 +68,20 @@ describe("GenomeBrowser", () => {
     mockParams = new URLSearchParams()
   })
 
-  it("renders page header and search bar", () => {
+  it("renders page header and search bar", async () => {
     mockCreateBrowser.mockReturnValue(new Promise(() => {}))
     render(<GenomeBrowser />)
     expect(screen.getByText("Genome Browser")).toBeInTheDocument()
     expect(screen.getByTestId("igv-search-input")).toBeInTheDocument()
     expect(screen.getByTestId("igv-search-button")).toBeInTheDocument()
+    await screen.findByRole("status", { name: /loading genome browser/i })
   })
 
-  it("renders the IGV browser component", () => {
+  it("renders the IGV browser component", async () => {
     mockCreateBrowser.mockReturnValue(new Promise(() => {}))
     render(<GenomeBrowser />)
     expect(screen.getByTestId("igv-container")).toBeInTheDocument()
+    await screen.findByRole("status", { name: /loading genome browser/i })
   })
 
   it("passes locus from URL params to IGV browser", async () => {
@@ -209,10 +228,11 @@ describe("GenomeBrowser", () => {
     expect(screen.queryByTestId("variant-click-indicator")).not.toBeInTheDocument()
   })
 
-  it("has accessible search form with proper labels", () => {
+  it("has accessible search form with proper labels", async () => {
     mockCreateBrowser.mockReturnValue(new Promise(() => {}))
     render(<GenomeBrowser />)
     expect(screen.getByRole("search")).toHaveAttribute("aria-label", "Navigate to genomic locus")
     expect(screen.getByLabelText("Genomic locus search")).toBeInTheDocument()
+    await screen.findByRole("status", { name: /loading genome browser/i })
   })
 })
