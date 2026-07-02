@@ -8,6 +8,18 @@ machine.**
 - **Your raw data file**, the parsed genotypes, every annotation, and every analysis
   finding live only in Yeliztli's local data directory (by default `~/.yeliztli/`) on the
   computer you run it on.
+- **Application logs stay local, too, but they can reveal analysis metadata.**
+  Yeliztli writes structured application logs to `reference.db` (`log_entries`, shown in
+  **Settings -> System Health -> Log explorer**) and renders logs to stdout, which installed
+  services can capture in `journalctl`, `~/Library/Logs/yeliztli-*.log`, or Docker logs. These
+  logs are for troubleshooting and can include sample filenames or local paths, gene symbols,
+  variant identifiers such as rsIDs, genomic coordinates, download paths, and error details.
+  New structured log entries redact genotype-like fields such as genotypes, diplotypes,
+  haplotypes, and `gt` values before they reach the Log explorer or service logs, but older logs
+  from earlier Yeliztli versions may still contain those values. Logs can still show what you
+  analyzed and where files live. Yeliztli does not currently prune the `log_entries` table
+  automatically; service-log retention is controlled by your operating system, launch service, or
+  Docker runtime.
 - Yeliztli serves its interface on `localhost` and, by default, binds only to the loopback
   address (`127.0.0.1`), so it is not reachable from other machines on your network.
   If you override the bind host to a non-loopback address for remote access, enable
@@ -95,6 +107,13 @@ locally and needs no network once reference data is installed.
 Your data is just files in the data directory. Deleting a sample from the app removes it (and
 any merged children); removing the data directory removes everything. Uninstalling Yeliztli
 does not delete your data unless you explicitly ask it to.
+
+Sample deletion does not rewrite old application logs. Earlier entries in `reference.db` or
+service logs may still mention that sample's filename/path or analysis metadata after the sample
+itself is gone, and logs from older Yeliztli versions may include genotype-like fields that newer
+versions redact. Removing the data directory removes the `reference.db` log table, but service
+logs captured outside the data directory must be cleared separately using your operating system,
+launch-service, or Docker log controls.
 
 !!! note "Use test fixtures for demos"
     When experimenting, capturing screenshots, or filing a bug report, use synthetic or test
