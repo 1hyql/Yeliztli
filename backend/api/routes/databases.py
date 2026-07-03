@@ -1265,6 +1265,7 @@ def _execute_bundle_install(
         )
 
         from backend.db.update_manager import (
+            get_current_version,
             run_ancestry_pca_bundle_update,
             run_gnomad_bundle_update,
             run_pgs_scores_bundle_update,
@@ -1292,7 +1293,32 @@ def _execute_bundle_install(
             return
 
         # Remote unavailable or no manifest URL — fall back to the committed copy.
+        dest_existed_before_fallback = db_info.dest_path(settings).exists()
+        recorded_version_before_fallback = get_current_version(engine, db_info.name)
         if install_committed_bundle(db_info, settings):
+            if (
+                dest_existed_before_fallback
+                and recorded_version_before_fallback is not None
+                and _bundle_install_needed(db_info, engine)
+            ):
+                error = (
+                    f"{db_info.display_name} update unavailable; existing installed bundle "
+                    "was left unchanged"
+                )
+                _update_job(
+                    engine,
+                    job_id,
+                    status="failed",
+                    progress_pct=0.0,
+                    message=error,
+                    error=error,
+                )
+                logger.warning(
+                    "bundle_install_fallback_unchanged_still_needed",
+                    db_name=db_info.name,
+                    job_id=job_id,
+                )
+                return
             _update_job(
                 engine,
                 job_id,
