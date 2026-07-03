@@ -246,23 +246,26 @@ async def trigger_update(req: TriggerUpdateRequest) -> TriggerUpdateResponse:
     Enqueues the update as a background Huey task and returns
     the job_id for progress tracking via SSE.
     """
-    from backend.db.update_manager import _BUNDLE_DBS
+    from backend.db.update_manager import _BUNDLE_DBS, _DOWNLOAD_DBS
     from backend.tasks.huey_tasks import (
         create_database_update_job,
         run_database_update_task,
     )
 
-    # Any database with a build function, or a manifest-driven bundle
-    # (vep_bundle / lai_bundle / ancestry_pca), can be updated. The bundle set
-    # must mirror the scheduler's _dispatch_auto_update and huey's
-    # run_database_update_task so the UI never offers an update the backend
-    # rejects (previously lai_bundle/ancestry_pca 400'd here).
+    # Any database with a build function, a manifest-driven bundle
+    # (vep_bundle / lai_bundle / ancestry_pca / gnomad / pgs_scores), or a
+    # direct-download runner can be updated. These sets must mirror the
+    # scheduler's _dispatch_auto_update and huey's run_database_update_task so
+    # the UI never offers an update the backend rejects.
     db_info = DATABASES.get(req.db_name)
     build_fn = get_build_fn(req.db_name) if db_info else None
     is_bundle = req.db_name in _BUNDLE_DBS
-    if build_fn is None and not is_bundle:
+    is_download = req.db_name in _DOWNLOAD_DBS
+    if build_fn is None and not is_bundle and not is_download:
         supported = sorted(
-            {k for k in DATABASES if get_build_fn(k) is not None} | set(_BUNDLE_DBS)
+            {k for k in DATABASES if get_build_fn(k) is not None}
+            | set(_BUNDLE_DBS)
+            | set(_DOWNLOAD_DBS)
         )
         raise HTTPException(
             status_code=400,
@@ -273,6 +276,13 @@ async def trigger_update(req: TriggerUpdateRequest) -> TriggerUpdateResponse:
     registry = get_registry()
     settings = registry.settings
     estimated_size = db_info.expected_size_bytes if db_info else 0
+    if is_download and settings.update_download_window is not None:
+        from backend.db.update_manager import _fetch_encode_ccres_remote_info
+
+        if req.db_name == "encode_ccres":
+            remote_info = _fetch_encode_ccres_remote_info(timeout=10.0)
+            if remote_info is not None:
+                estimated_size = remote_info.download_size_bytes
     if not should_download_now(estimated_size, settings.update_download_window):
         raise HTTPException(
             status_code=409,
