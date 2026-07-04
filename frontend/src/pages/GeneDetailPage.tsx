@@ -203,11 +203,6 @@ export default function GeneDetailPage() {
               )}
             </p>
           )}
-          {data.uniprot_error && !data.uniprot && (
-            <p className="text-sm text-amber-700 dark:text-amber-400">
-              {data.uniprot_error}
-            </p>
-          )}
         </div>
       </div>
 
@@ -226,7 +221,10 @@ export default function GeneDetailPage() {
           />
         </div>
       ) : (
-        <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
+        <div
+          className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground"
+          data-testid="protein-structure-placeholder"
+        >
           {data.uniprot_error ?? "Protein data not available for this gene."}
         </div>
       )}

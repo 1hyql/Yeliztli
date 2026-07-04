@@ -208,6 +208,29 @@ describe("GeneDetailPage", () => {
       within(table).getByText("Conflicting interpretations of pathogenicity"),
     ).toHaveClass("text-yellow-600")
   })
+
+  it("shows UniProt unavailable errors only in the protein structure placeholder", () => {
+    const uniprotError = "Protein data unavailable offline."
+
+    mockGeneDetail({
+      gene_symbol: "CFTR",
+      uniprot: null,
+      uniprot_error: uniprotError,
+      phenotypes: [],
+      literature: [],
+      literature_errors: [],
+      population_af: [],
+      variants: [],
+    })
+
+    renderGeneDetailPage()
+
+    expect(screen.getByTestId("gene-symbol")).toHaveTextContent("CFTR")
+    expect(screen.getAllByText(uniprotError)).toHaveLength(1)
+
+    const proteinPlaceholder = screen.getByTestId("protein-structure-placeholder")
+    expect(proteinPlaceholder).toHaveTextContent(uniprotError)
+  })
 })
 
 // ── NightingaleViewer tests ──────────────────────────────────────────
