@@ -17,6 +17,7 @@ import pytest
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
 
+from backend.annotation.encode_ccres import CCREResult
 from backend.annotation.gnomad import _create_gnomad_table
 from backend.api.routes import igv_tracks as igv_tracks_route
 from backend.db.connection import DBRegistry, get_registry
@@ -218,6 +219,35 @@ def sample_with_annotations(test_client: TestClient) -> int:
     return sample_id
 
 
+@pytest.mark.parametrize(
+    ("path_template", "params"),
+    [
+        ("/api/igv-tracks/clinvar", {"chr": "chr17", "start": "inf", "end": "100"}),
+        (
+            "/api/igv-tracks/sample/{sample_id}/variants",
+            {"chr": "chr17", "start": "0", "end": "nan"},
+        ),
+        ("/api/igv-tracks/gnomad", {"chr": "chr17", "start": "inf", "end": "100"}),
+        ("/api/igv-tracks/encode-ccres", {"chr": "chr1", "start": "0", "end": "nan"}),
+    ],
+)
+def test_track_regions_reject_non_finite_bounds(
+    test_client: TestClient,
+    sample_with_variants: int,
+    path_template: str,
+    params: dict[str, str],
+) -> None:
+    """Non-finite IGV bounds should return validation-style 422 responses."""
+    path = path_template.format(sample_id=sample_with_variants)
+
+    resp = test_client.get(path, params=params)
+
+    assert resp.status_code == 422
+    payload = resp.json()
+    assert "detail" in payload
+    assert payload["detail"]
+
+
 # ── ClinVar VCF Track Tests ─────────────────────────────────────────
 
 
@@ -258,6 +288,18 @@ class TestClinVarTrack:
         assert resp.status_code == 200
         data_lines = [line for line in resp.text.strip().split("\n") if not line.startswith("#")]
         assert len(data_lines) == 2
+
+    @pytest.mark.usefixtures("_seed_clinvar")
+    def test_clinvar_region_accepts_fractional_igv_bounds(self, test_client: TestClient) -> None:
+        """IGV.js can emit floating-point bounds; the API floors/ceils them."""
+        resp = test_client.get(
+            "/api/igv-tracks/clinvar",
+            params={"chr": "chr17", "start": 41245466.35, "end": 41245466.65},
+        )
+        assert resp.status_code == 200
+        data_lines = [line for line in resp.text.strip().split("\n") if not line.startswith("#")]
+        assert len(data_lines) == 1
+        assert "rs123" in data_lines[0]
 
     @pytest.mark.usefixtures("_seed_clinvar")
     def test_clinvar_region_empty_when_no_overlap(self, test_client: TestClient) -> None:
@@ -314,6 +356,19 @@ class TestSampleVariantsTrack:
         lines = resp.text.strip().split("\n")
         data_lines = [line for line in lines if not line.startswith("#")]
         assert len(data_lines) == 3  # rs100, rs101, rs102 on chr17
+
+    def test_sample_region_accepts_fractional_igv_bounds(
+        self, test_client: TestClient, sample_with_variants: int
+    ) -> None:
+        """Fractional IGV.js bounds should not 422 the sample VCF track."""
+        resp = test_client.get(
+            f"/api/igv-tracks/sample/{sample_with_variants}/variants",
+            params={"chr": "chr17", "start": 41245466.35, "end": 41245466.65},
+        )
+        assert resp.status_code == 200
+        data_lines = [line for line in resp.text.strip().split("\n") if not line.startswith("#")]
+        assert len(data_lines) == 1
+        assert "rs100" in data_lines[0]
 
     def test_sample_region_het_unannotated_fallback(
         self, test_client: TestClient, sample_with_variants: int
@@ -470,6 +525,23 @@ class TestGnomadTrack:
         assert resp1.status_code == 200
         assert resp2.status_code == 200
 
+    def test_gnomad_accepts_fractional_igv_bounds(
+        self,
+        test_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        _seed_gnomad: DBRegistry,
+    ) -> None:
+        """Fractional IGV.js bounds should not 422 the gnomAD JSON track."""
+        monkeypatch.setattr(igv_tracks_route, "get_registry", lambda: _seed_gnomad)
+
+        resp = test_client.get(
+            "/api/igv-tracks/gnomad",
+            params={"chr": "chr17", "start": 41245464.35, "end": 41245465.35},
+        )
+
+        assert resp.status_code == 200
+        assert [item["name"] for item in resp.json()] == ["rsGnomad1 AF=0.0123"]
+
     def test_gnomad_converts_vcf_pos_to_igv_feature_interval(
         self, monkeypatch: pytest.MonkeyPatch, _seed_gnomad: DBRegistry
     ) -> None:
@@ -514,6 +586,48 @@ class TestEncodeCcresTrack:
         )
         assert resp.status_code == 200
         assert resp.json() == []
+
+    def test_ccres_accepts_fractional_igv_bounds(
+        self,
+        test_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        db_registry: DBRegistry,
+    ) -> None:
+        """Fractional IGV.js bounds should not 422 the ENCODE cCRE track."""
+        observed: dict[str, int | str] = {}
+
+        def fake_query(chrom: str, start: int, end: int, _engine: sa.Engine) -> list[CCREResult]:
+            observed.update({"chrom": chrom, "start": start, "end": end})
+            return [
+                CCREResult(
+                    accession="EH38E0000001",
+                    chrom=chrom,
+                    start_pos=start,
+                    end_pos=end,
+                    ccre_class="PLS",
+                )
+            ]
+
+        monkeypatch.setattr(igv_tracks_route, "get_registry", lambda: db_registry)
+        monkeypatch.setattr("backend.annotation.encode_ccres.is_loaded", lambda _engine: True)
+        monkeypatch.setattr("backend.annotation.encode_ccres.query_ccres_by_region", fake_query)
+
+        resp = test_client.get(
+            "/api/igv-tracks/encode-ccres",
+            params={"chr": "chr1", "start": 10400.35, "end": 10499.35},
+        )
+
+        assert resp.status_code == 200
+        assert observed == {"chrom": "1", "start": 10400, "end": 10500}
+        assert resp.json() == [
+            {
+                "chr": "chr1",
+                "start": 10400,
+                "end": 10500,
+                "name": "EH38E0000001 (PLS)",
+                "color": "rgb(255,0,0)",
+            }
+        ]
 
 
 # ── Genotype conversion unit tests ───────────────────────────────────
