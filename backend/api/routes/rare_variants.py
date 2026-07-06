@@ -471,35 +471,82 @@ def export_rare_variants_vcf(
 ) -> StreamingResponse:
     """Export stored rare variant findings as a minimal VCF 4.2 file.
 
-    Queries annotated_variants directly (via rsid join with findings)
-    to obtain proper chrom/pos for valid VCF records.
+    Each record is rebuilt from the finding's own stored locus/allele identity
+    (``chrom``/``pos``/``ref``/``alt`` persisted in ``detail_json``), rather than
+    re-resolving CHROM/POS/REF/ALT via an rsID join to ``annotated_variants``.
+    A VCF 4.2 record is keyed on CHROM/POS/REF/ALT — ID is only an identifier
+    ("No identifier should be present in more than one data record") — so the
+    finding's own stored identity, not a re-lookup by the (potentially shared,
+    aliased, or absent) rsID, is authoritative. Findings written before #1575
+    lack the persisted coordinates; for those only, the export falls back to the
+    annotated_variants row for the finding's rsid (unique — it is the PK). (#1575)
 
     Example: ``GET /api/analysis/rare-variants/export/vcf?sample_id=1``
     """
     sample_engine = _get_sample_engine(sample_id)
-    av = annotated_variants
 
-    # Join findings with annotated_variants to get chrom/pos/ref/alt
     with sample_engine.connect() as conn:
-        rows = conn.execute(
+        finding_rows = conn.execute(
             sa.select(
-                av.c.chrom,
-                av.c.pos,
-                av.c.rsid,
-                av.c.ref,
-                av.c.alt,
-                av.c.gene_symbol,
-                av.c.consequence,
-                av.c.clinvar_significance,
-                av.c.gnomad_af_global,
+                findings.c.id,
+                findings.c.rsid,
+                findings.c.gene_symbol,
+                findings.c.clinvar_significance,
                 findings.c.evidence_level,
-            )
-            .select_from(
-                findings.join(av, findings.c.rsid == av.c.rsid),
-            )
-            .where(findings.c.module == "rare_variants")
-            .order_by(av.c.chrom, av.c.pos)
+                findings.c.detail_json,
+            ).where(findings.c.module == "rare_variants")
         ).fetchall()
+
+    # Rebuild each record from the finding's own stored locus/allele identity,
+    # then order by genomic coordinate (mirrors the previous ORDER BY chrom, pos;
+    # records whose stored chrom/pos is missing sort last).
+    records: list[dict[str, Any]] = []
+    for row in finding_rows:
+        detail = _parse_detail_json(row.id, row.detail_json)
+        records.append(
+            {
+                "chrom": detail.get("chrom"),
+                "pos": detail.get("pos"),
+                "rsid": row.rsid,
+                "ref": detail.get("ref"),
+                "alt": detail.get("alt"),
+                "gene_symbol": row.gene_symbol,
+                "consequence": detail.get("consequence"),
+                "clinvar_significance": row.clinvar_significance,
+                "gnomad_af_global": detail.get("af_global"),
+                "evidence_level": row.evidence_level,
+            }
+        )
+    # Backward-compat backfill: findings stored before #1575 have no chrom/pos in
+    # detail_json. For those (only), fall back to the annotated_variants row for
+    # the finding's rsid so an already-analysed sample that has not been re-run
+    # still exports real coordinates rather than placeholders. av.rsid is the
+    # primary key, so this resolves to exactly one row; the finding's own stored
+    # identity is always preferred whenever present.
+    legacy = [r for r in records if r["chrom"] is None or r["pos"] is None]
+    legacy_rsids = {r["rsid"] for r in legacy if r["rsid"]}
+    if legacy_rsids:
+        av = annotated_variants
+        with sample_engine.connect() as conn:
+            av_by_rsid = {
+                row.rsid: row
+                for row in conn.execute(
+                    sa.select(av.c.rsid, av.c.chrom, av.c.pos, av.c.ref, av.c.alt).where(
+                        av.c.rsid.in_(legacy_rsids)
+                    )
+                ).fetchall()
+            }
+        for r in legacy:
+            av_row = av_by_rsid.get(r["rsid"])
+            if av_row is None:
+                continue
+            for field in ("chrom", "pos", "ref", "alt"):
+                if r[field] is None:
+                    r[field] = getattr(av_row, field)
+
+    records.sort(
+        key=lambda r: (r["chrom"] is None, r["chrom"] or "", r["pos"] is None, r["pos"] or 0)
+    )
 
     buf = io.StringIO()
 
@@ -516,18 +563,18 @@ def export_rare_variants_vcf(
     buf.write('##INFO=<ID=EVLVL,Number=1,Type=Integer,Description="Evidence level (1-4 stars)">\n')
     buf.write("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n")
 
-    for row in rows:
-        chrom = row.chrom or "."
-        pos = str(row.pos) if row.pos else "0"
-        rsid = row.rsid or "."
-        ref = row.ref or "."
-        alt = row.alt or "."
-        gene = row.gene_symbol or "."
-        csq = row.consequence or "."
-        clnsig = (row.clinvar_significance or ".").replace(" ", "_")
-        af_val = row.gnomad_af_global
+    for row in records:
+        chrom = row["chrom"] or "."
+        pos = str(row["pos"]) if row["pos"] else "0"
+        rsid = row["rsid"] or "."
+        ref = row["ref"] or "."
+        alt = row["alt"] or "."
+        gene = row["gene_symbol"] or "."
+        csq = row["consequence"] or "."
+        clnsig = (row["clinvar_significance"] or ".").replace(" ", "_")
+        af_val = row["gnomad_af_global"]
         af_str = f"{af_val:.6f}" if af_val is not None else "."
-        evlvl = str(row.evidence_level or 1)
+        evlvl = str(row["evidence_level"] or 1)
 
         info_parts = [
             f"GENE={gene}",
