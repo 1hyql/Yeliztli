@@ -57,6 +57,13 @@ all of them are user-initiated, so here is the complete accounting.
   payload, but the regions you choose to inspect are themselves sensitive. This fallback happens
   only while the Genome Browser is open, and the **first** time it is needed Yeliztli shows a
   one-time in-app notice before any third-party reference data is requested.
+- **Gene Detail UniProt lookup.** Opening a Gene Detail page (`/genes/{symbol}`) checks the
+  local UniProt cache and, on a cache miss or stale cache entry, fetches reviewed human protein
+  annotations from `rest.uniprot.org/uniprotkb`. The request includes the gene symbol you are
+  viewing and reveals that inspection, your IP address, and request timing to UniProt/EBI. It
+  does **not** send genotypes, variants, sample IDs, or findings. Results are cached locally in
+  `reference.db` for 30 days. If offline or blocked, the page shows stale cached protein data
+  when available, or a message that protein data is unavailable.
 
 ### User-initiated
 
@@ -71,8 +78,9 @@ all of them are user-initiated, so here is the complete accounting.
 
 ## Going fully offline
 
-You can avoid the **user-initiated** connections by not supplying the PubMed/OMIM keys and not
-starting reference downloads. For the **automatic** connections:
+You can avoid the PubMed/OMIM enrichment and reference-download connections by not supplying a
+PubMed contact email, not supplying an OMIM key, and not starting reference downloads. For the
+**automatic** connections:
 
 - **Turn off the update checks.** Set `update_check_interval = "off"` in your `config.toml`
   (or the `YELIZTLI_UPDATE_CHECK_INTERVAL=off` environment variable). This disables **both** the
@@ -88,6 +96,9 @@ starting reference downloads. For the **automatic** connections:
   makes no reference/RefSeq request to IGV.js hosts. If any file is missing or validation fails,
   the Genome Browser keeps the disclosure-gated hosted `hg19` fallback; if you do not open the
   Genome Browser, it makes no connection.
+- There is no API-key switch for the Gene Detail UniProt lookup. To avoid that outbound request,
+  do not open Gene Detail pages for genes that are not already cached, or block Yeliztli's
+  network access. Cached UniProt entries already in `reference.db` can still be shown offline.
 
 For a hard guarantee that **nothing** leaves the machine, **block Yeliztli's network access at the
 operating-system or firewall level** after setup — that suppresses all of the automatic checks
