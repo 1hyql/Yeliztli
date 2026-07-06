@@ -13,6 +13,7 @@ Entry point: `yeliztli-setup` console script.
 from __future__ import annotations
 
 import argparse
+import os
 import platform
 import shlex
 import shutil
@@ -87,6 +88,24 @@ def _find_python() -> str:
 def _find_command(name: str) -> str | None:
     """Find a command on PATH, return full path or None."""
     return shutil.which(name)
+
+
+def _find_huey_consumer() -> str:
+    """Return an absolute path to the Huey consumer console script."""
+    if command := _find_command("huey_consumer"):
+        return str(Path(command).expanduser().resolve())
+
+    entrypoint_arg = sys.argv[0]
+    entrypoint = Path(entrypoint_arg).expanduser()
+    entrypoint_has_dir = any(
+        separator and separator in entrypoint_arg for separator in (os.sep, os.altsep)
+    )
+    if entrypoint.is_absolute() or entrypoint_has_dir:
+        sibling = entrypoint.resolve().with_name("huey_consumer")
+        if sibling.exists():
+            return str(sibling)
+
+    return str(Path(_find_python()).with_name("huey_consumer"))
 
 
 def _run(cmd: list[str], check: bool = True, **kwargs) -> subprocess.CompletedProcess:
@@ -266,6 +285,7 @@ def _render_plist(template_path: Path, install_dir: Path) -> str:
     content = template_path.read_text()
     content = content.replace("__INSTALL_DIR__", xml_escape(str(install_dir)))
     content = content.replace("__PYTHON__", xml_escape(_find_python()))
+    content = content.replace("__HUEY_CONSUMER__", xml_escape(_find_huey_consumer()))
     # Expand ~ in log paths to absolute home
     content = content.replace("~/Library/Logs", xml_escape(str(LOG_DIR_MACOS)))
     return content
@@ -285,6 +305,9 @@ def install_launchd() -> None:
         if not src.exists():
             print(f"  [warn] Template not found: {src}")
             continue
+
+        if dst.exists():
+            _run(["launchctl", "unload", str(dst)], check=False)
 
         rendered = _render_plist(src, install_dir)
         dst.write_text(rendered)
