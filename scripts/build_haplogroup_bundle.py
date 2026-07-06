@@ -1071,8 +1071,14 @@ def build_mt_tree() -> dict[str, Any]:
     h = _node(
         "H",
         [
-            _mt_snp("i5002706", 2706, "G"),
-            _mt_snp("rs1000687", 13252, "T"),
+            # H is defined by G2706A: the DERIVED allele is A. rCRS is haplogroup
+            # H2a2a1, so it carries the derived base (Ensembl GRCh37 MT:2706=A);
+            # the prior "G" was the ancestral allele, which scored every true H
+            # carrier (~40-45% of Europeans) as conflicting and blocked H (#1579).
+            _mt_snp("i5002706", 2706, "A"),
+            # (removed) rs1000687 @ m.13252 was spurious: rs1000687 is an autosomal
+            # chr11:133005679 dbSNP variant, not an mtDNA marker, so it never
+            # matched a real MT call and its conflict blocked descent into H (#1579).
         ],
         [h1, h2, h3, h4, h5, h6, h7, h10, h11, h13],
     )
@@ -1116,7 +1122,10 @@ def build_mt_tree() -> dict[str, Any]:
     hv = _node(
         "HV",
         [
-            _mt_snp("i5014766", 14766, "T"),
+            # HV is defined by T14766C: the DERIVED allele is C. rCRS (H2a2a1 ⊂ HV)
+            # carries it (Ensembl GRCh37 MT:14766=C); the prior "T" was ancestral,
+            # blocking every true HV/H carrier as conflicting (#1579).
+            _mt_snp("i5014766", 14766, "C"),
         ],
         [h, hv0, hv1],
     )
@@ -1508,9 +1517,17 @@ def build_mt_tree() -> dict[str, Any]:
     # Assemble R branch
     r0 = _node(
         "R0",
-        [
-            _mt_snp("i5000073", 73, "G"),
-        ],
+        # m.73 (A73G) is a recurrent control-region site that cannot serve as a
+        # single R0 discriminator. PhyloTree defines R0 by G73A, so the rCRS/H
+        # spine carries 73A (Ensembl GRCh37 MT:73=A) — but the prior bundle stored
+        # R0 as 73G (inverted) AND m.73 recurs on sub-branches, so no single R0
+        # allele works: as "G" it scored a true H carrier (73A) as conflicting and
+        # blocked the whole rCRS spine; as "A" it would block whichever descendants
+        # carry 73G (empirically the bundle's HV0/V branch). Verified by the shipped
+        # classifier: dropping m.73 lets the rCRS genotype reach H while the HV0/V
+        # sibling still resolves. R0 is kept as a structural node (descent is scored
+        # on HV's 14766 and below) rather than mis-polarised (#1579).
+        [],
         [hv],
     )
 
