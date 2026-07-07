@@ -467,7 +467,7 @@ class TestFixtureIntegration:
         "rs1000331": ("Y", 20085901, "T"),
         "rs1000247": ("Y", 20503721, "A"),
         "rs1000867": ("Y", 32170896, "T"),
-        "rs1000546": ("Y", 36452173, "T"),
+        "rs2032658": ("Y", 15581983, "G"),
         "rs1000154": ("Y", 39970128, "G"),
         "rs1000147": ("Y", 41031901, "A"),
         "rs1000306": ("Y", 53186638, "C"),
@@ -542,6 +542,7 @@ class TestBuildScript:
         from scripts.build_haplogroup_bundle import (
             _validate_audited_y_rsids,
             _validate_tree,
+            _validate_y_cross_clade_duplicates,
             build_mt_tree,
             build_y_tree,
         )
@@ -550,9 +551,11 @@ class TestBuildScript:
         y_tree = build_y_tree()
         y_issues = _validate_tree(y_tree)
         y_reference_issues = _validate_audited_y_rsids(y_tree)
+        y_duplicate_issues = _validate_y_cross_clade_duplicates(y_tree)
         assert mt_issues == [], f"mtDNA validation issues: {mt_issues}"
         assert y_issues == [], f"Y-chr validation issues: {y_issues}"
         assert y_reference_issues == [], f"Y reference validation issues: {y_reference_issues}"
+        assert y_duplicate_issues == [], f"Y duplicate validation issues: {y_duplicate_issues}"
 
     def test_audited_y_rsid_guard_rejects_stale_reference_records(self) -> None:
         """#1652: the builder rejects the stale rsID coordinates/alleles that
@@ -574,6 +577,35 @@ class TestBuildScript:
         assert any(
             "rs9341296" in issue and "expected one of ('C', 'T')" in issue for issue in issues
         )
+
+    def test_audited_y_rsid_guard_rejects_excluded_records(self) -> None:
+        """#1654: non-Y and unresolved duplicate suspects cannot re-enter the Y tree."""
+        from scripts.build_haplogroup_bundle import _validate_audited_y_rsids, build_y_tree
+
+        y_tree = build_y_tree()
+        r_node = find_node(y_tree, "R")
+        assert r_node is not None
+        r_node["defining_snps"].append({"rsid": "rs1000546", "pos": 36452173, "allele": "T"})
+
+        issues = _validate_audited_y_rsids(y_tree)
+        assert any(
+            "rs1000546" in issue and "excluded from the Y tree" in issue for issue in issues
+        )
+
+    def test_y_duplicate_guard_rejects_unregistered_cross_clade_reuse(self) -> None:
+        """#1654: a new rsID copy on an unrelated Y clade must fail validation."""
+        from scripts.build_haplogroup_bundle import (
+            _validate_y_cross_clade_duplicates,
+            build_y_tree,
+        )
+
+        y_tree = build_y_tree()
+        b_node = find_node(y_tree, "B")
+        assert b_node is not None
+        b_node["defining_snps"].append({"rsid": "rs2032658", "pos": 15581983, "allele": "G"})
+
+        issues = _validate_y_cross_clade_duplicates(y_tree)
+        assert any("rs2032658" in issue and "unrelated Y clades" in issue for issue in issues)
 
     def test_count_helpers_consistent(self) -> None:
         """_count_nodes and _count_snps should match collected counts."""
