@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { MemoryRouter, Route, Routes } from "react-router-dom"
 import VariantDetailPage from "@/pages/VariantDetailPage"
 import type { VariantDetail } from "@/types/variant-detail"
+import { HGVS_CODING_TOOLTIP, HGVS_PROTEIN_TOOLTIP } from "@/lib/hgvsInfo"
 
 /** IGV.js is a browser-only module — stub it out. */
 vi.mock("@/components/igv-browser", () => ({
@@ -226,6 +227,22 @@ describe("VariantDetailPage (P2-21a)", () => {
     expect(screen.getAllByText("missense variant").length).toBeGreaterThanOrEqual(1)
   })
 
+  it("annotates HGVS coding and protein rows with notation tooltips (#1669)", async () => {
+    mockFetch.mockImplementation(async () => ({
+      ok: true,
+      json: async () => mockVariant,
+    }))
+
+    renderPage("rs100")
+
+    await waitFor(() => {
+      expect(screen.getByTestId("tab-overview")).toBeInTheDocument()
+    })
+
+    expect(screen.getAllByTitle(HGVS_CODING_TOOLTIP).some((node) => node.textContent === "Coding")).toBe(true)
+    expect(screen.getAllByTitle(HGVS_PROTEIN_TOOLTIP).some((node) => node.textContent === "Protein")).toBe(true)
+  })
+
   it("shows transcript table when multiple transcripts exist", async () => {
     mockFetch.mockImplementation(async () => ({
       ok: true,
@@ -237,6 +254,8 @@ describe("VariantDetailPage (P2-21a)", () => {
     await waitFor(() => {
       expect(screen.getByText("NM_007299")).toBeInTheDocument()
     })
+    expect(screen.getAllByTitle(HGVS_CODING_TOOLTIP).some((node) => node.textContent === "HGVS (c.)")).toBe(true)
+    expect(screen.getAllByTitle(HGVS_PROTEIN_TOOLTIP).some((node) => node.textContent === "HGVS (p.)")).toBe(true)
   })
 
   it("switches to Population tab", async () => {
@@ -308,6 +327,7 @@ describe("VariantDetailPage (P2-21a)", () => {
     await user.click(screen.getByRole("tab", { name: /protein/i }))
     expect(screen.getByTestId("tab-protein")).toBeInTheDocument()
     expect(screen.getByText("p.Tyr1853Ter")).toBeInTheDocument()
+    expect(screen.getByTitle(HGVS_PROTEIN_TOOLTIP)).toHaveTextContent("Protein change")
     expect(screen.getByText(/View full gene detail/)).toBeInTheDocument()
   })
 
