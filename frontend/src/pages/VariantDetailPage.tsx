@@ -35,6 +35,7 @@ import type {
 import { IgvBrowser } from "@/components/igv-browser"
 import { buildDefaultTracks } from "@/components/igv-browser/tracks"
 import WatchButton from "@/components/variant-detail/WatchButton"
+import EnsemblePathogenicBadge from "@/components/variant-detail/EnsemblePathogenicBadge"
 import GTExEqtlBadgeCard from "@/components/variant-detail/GTExEqtlBadge"
 import SpliceAIBadgeCard from "@/components/variant-detail/SpliceAIBadge"
 import { cn } from "@/lib/utils"
@@ -276,9 +277,11 @@ function OverviewTab({ variant }: { variant: VariantDetail }) {
           : null
       } />
       {variant.ensemble_pathogenic && (
-        <div className="mt-2 px-3 py-2 rounded text-sm font-medium bg-red-50 dark:bg-red-950/20 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-800/30">
-          Ensemble pathogenic (≥3 independent axes deleterious)
-        </div>
+        <EnsemblePathogenicBadge
+          deleteriousCount={variant.deleterious_count}
+          deleteriousTotalAssessed={variant.deleterious_total_assessed}
+          className="mt-2 px-3 py-2 text-sm"
+        />
       )}
 
       {/* Evidence conflict */}
@@ -492,9 +495,11 @@ function ClinicalTab({ variant }: { variant: VariantDetail }) {
         <DetailRow label="PrimateAI" value={variant.primateai?.toFixed(3)} />
       </div>
       {variant.ensemble_pathogenic && (
-        <div className="mt-3 px-3 py-2 rounded text-sm font-medium bg-red-50 dark:bg-red-950/20 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-800/30">
-          Ensemble pathogenic (≥3 independent axes deleterious)
-        </div>
+        <EnsemblePathogenicBadge
+          deleteriousCount={variant.deleterious_count}
+          deleteriousTotalAssessed={variant.deleterious_total_assessed}
+          className="mt-3 px-3 py-2 text-sm"
+        />
       )}
 
       {/* GTEx eQTL regulatory context (SW-F3) — context-only, never ACMG */}

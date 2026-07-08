@@ -107,6 +107,7 @@ const mockVariantDetail: VariantDetail = {
   hpo_terms: null,
   inheritance_pattern: "Autosomal dominant",
   deleterious_count: 4,
+  deleterious_total_assessed: 4,
   evidence_conflict: true,
   ensemble_pathogenic: true,
   annotation_coverage: 0b111111,
@@ -460,18 +461,31 @@ describe("VariantDetailSidePanel (P2-21)", () => {
   })
 
   it("shows ensemble pathogenic indicator", async () => {
-    mockFetch.mockImplementation(async () => ({
-      ok: true,
-      json: async () => mockVariantDetail,
-    }))
+    const page = makeVariantPage(1)
+    const twoOfTwoDetail: VariantDetail = {
+      ...mockVariantDetail,
+      deleterious_count: 2,
+      deleterious_total_assessed: 2,
+      ensemble_pathogenic: true,
+    }
+    setupFetchMock(page, twoOfTwoDetail)
 
     render(
       <VariantDetailSidePanel rsid="rs100" sampleId={1} onClose={() => {}} />,
     )
 
     await waitFor(() => {
-      expect(screen.getByText(/Ensemble pathogenic/)).toBeInTheDocument()
+      expect(
+        screen.getByText(
+          "Ensemble pathogenic: strict majority of assessed independent axes deleterious (2/2)",
+        ),
+      ).toBeInTheDocument()
     })
+    expect(
+      screen.queryByText(
+        "Ensemble pathogenic: strict majority of assessed independent axes deleterious (4/4)",
+      ),
+    ).not.toBeInTheDocument()
   })
 })
 
