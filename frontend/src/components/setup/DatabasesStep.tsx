@@ -514,7 +514,7 @@ export default function DatabasesStep({ onNext, onBack }: DatabasesStepProps) {
             const isManual = db.build_mode === 'manual'
             const dbHealth = healthMap[db.name]
             const hasHealth = dbHealth != null
-            const hasIntegrityFailure = dbHealth?.integrity_ok === false
+            const hasIntegrityFailure = dbHealth?.state === 'corrupt'
             let isComplete = false
             if (!hasIntegrityFailure) {
               if (progress) {
@@ -551,6 +551,14 @@ export default function DatabasesStep({ onNext, onBack }: DatabasesStepProps) {
               failAction === 'resume' && isBundled ? 'retry' : failAction
             const showIntegrityStatus =
               hasIntegrityFailure || (isComplete && !bundledIncluded)
+            const showDownloadRequired =
+              !isManual &&
+              !bundledIncluded &&
+              !hasIntegrityFailure &&
+              !isComplete &&
+              !isFailed &&
+              !isRunning &&
+              !isPending
 
             return (
               <div
@@ -806,7 +814,7 @@ export default function DatabasesStep({ onNext, onBack }: DatabasesStepProps) {
                             Verified
                           </span>
                         )}
-                        {dbHealth?.integrity_ok === false && (
+                        {hasIntegrityFailure && (
                           <div className="flex flex-wrap items-center gap-2">
                             <span
                               className="inline-flex items-center gap-1 text-[11px] text-destructive"
@@ -858,15 +866,11 @@ export default function DatabasesStep({ onNext, onBack }: DatabasesStepProps) {
                         Ships with Yeliztli
                       </p>
                     )}
-                    {isBundled &&
-                      !bundledIncluded &&
-                      !hasIntegrityFailure &&
-                      !isRunning &&
-                      !isPending && (
-                        <p className="mt-0.5 text-xs text-muted-foreground">
-                          Download required
-                        </p>
-                      )}
+                    {showDownloadRequired && (
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        Download required
+                      </p>
+                    )}
                   </div>
                 </div>
               </div>
